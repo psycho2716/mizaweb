@@ -6,6 +6,5 @@ export type ApiFailure = { success: false; error: string };
 export type ApiResult<T> = ApiSuccess<T> | ApiFailure;
 
 export interface ProductsApiResponse {
-  products: ProductSummary[];
+    products: ProductSummary[];
 }
-
