@@ -1,0 +1,9 @@
+.cursor/
+.env
+.env.local
+.env.*.local
+node_modules/
+frontend/.next/
+backend/dist/
+.DS_Store
+supabase/.temp/
