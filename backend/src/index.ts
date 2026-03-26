@@ -3,6 +3,7 @@ import { Server as SocketServer } from "socket.io";
 import { app } from "./app";
 import { env } from "./config/env";
 import { initializePersistence } from "./integrations/supabase/persistence";
+import { setRealtimeServer } from "./lib/realtime";
 
 const server = createServer(app);
 const io = new SocketServer(server, {
@@ -17,6 +18,8 @@ io.on("connection", (socket) => {
     socket.join(channel);
   });
 });
+
+setRealtimeServer(io);
 
 async function startServer(): Promise<void> {
   await initializePersistence();

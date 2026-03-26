@@ -1,9 +1,7 @@
-import { apiFetch } from "@/lib/api/client";
-import type { Product } from "@/types";
+import type { ProductDetailResponse } from "@/types";
+import { ProductDetailClient } from "./product-detail-client";
 
-interface ProductResponse {
-  data: Product[];
-}
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 export default async function ProductDetailPage({
   params,
@@ -11,18 +9,16 @@ export default async function ProductDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const response = await apiFetch<ProductResponse>("/products");
-  const product = response.data.find((entry) => entry.id === id);
+  const response = await fetch(`${BACKEND_URL}/products/${id}`, { cache: "no-store" });
+  if (!response.ok) {
+    return <main className="p-6">Product not found.</main>;
+  }
+  const payload = (await response.json()) as ProductDetailResponse;
+  const product = payload.data;
 
   if (!product) {
     return <main className="p-6">Product not found.</main>;
   }
 
-  return (
-    <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-semibold">{product.title}</h1>
-      <p className="mt-2 text-sm text-zinc-700">{product.description}</p>
-      <p className="mt-3 font-medium">Base Price: PHP {product.basePrice}</p>
-    </main>
-  );
+  return <ProductDetailClient product={product} />;
 }

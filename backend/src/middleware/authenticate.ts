@@ -32,12 +32,14 @@ export function authenticate(
     }
   }
 
-  const authUserId = request.header("x-user-id");
-  if (!authUserId || !db.users.has(authUserId)) {
-    response.status(401).json({ error: "Unauthorized" });
-    return;
+  if (env.NODE_ENV === "test") {
+    const authUserId = request.header("x-user-id");
+    if (authUserId && db.users.has(authUserId)) {
+      request.authUserId = authUserId;
+      next();
+      return;
+    }
   }
 
-  request.authUserId = authUserId;
-  next();
+  response.status(401).json({ error: "Unauthorized" });
 }

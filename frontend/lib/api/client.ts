@@ -2,6 +2,7 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:400
 
 interface RequestOptions extends RequestInit {
     userId?: string;
+    includeGuestSession?: boolean;
 }
 
 interface StoredUser {
@@ -14,6 +15,12 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
     if (options?.userId) {
         headers.set("x-user-id", options.userId);
     } else if (typeof window !== "undefined") {
+        if (options?.includeGuestSession) {
+            const guestSessionId = window.localStorage.getItem("miza_guest_session_id");
+            if (guestSessionId) {
+                headers.set("x-guest-session-id", guestSessionId);
+            }
+        }
         const token = window.localStorage.getItem("miza_token");
         if (token) {
             headers.set("authorization", `Bearer ${token}`);

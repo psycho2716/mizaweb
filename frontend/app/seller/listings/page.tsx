@@ -1,83 +1,98 @@
 "use client";
 
 import { useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
+import { z } from "zod";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { createProduct, publishProduct } from "@/lib/api/endpoints";
+import { createListingSchema } from "@/types";
+
+type CreateListingFormValues = z.infer<typeof createListingSchema>;
 
 export default function SellerListingsPage() {
-  const [title, setTitle] = useState("Stone Tile");
-  const [description, setDescription] = useState("Polished stone tile");
-  const [basePrice, setBasePrice] = useState("1200");
   const [latestProductId, setLatestProductId] = useState("");
-  const [message, setMessage] = useState("");
+  const {
+    register,
+    handleSubmit,
+    formState: { isSubmitting },
+  } = useForm<CreateListingFormValues>({
+    resolver: zodResolver(createListingSchema),
+    defaultValues: {
+      title: "Stone Tile",
+      description: "Polished stone tile",
+      basePrice: 1200,
+    },
+  });
 
-  async function handleCreate() {
+  async function handleCreate(values: CreateListingFormValues) {
     try {
       const response = await createProduct({
-        title,
-        description,
-        basePrice: Number(basePrice),
+        title: values.title,
+        description: values.description,
+        basePrice: values.basePrice,
       });
       setLatestProductId(response.id);
-      setMessage(`Created listing ${response.id}`);
+      toast.success(`Created listing ${response.id}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Create failed");
+      toast.error(error instanceof Error ? error.message : "Create failed");
     }
   }
 
   async function handlePublish() {
     if (!latestProductId) {
-      setMessage("Create a product first.");
+      toast.info("Create a product first.");
       return;
     }
     try {
       await publishProduct(latestProductId);
-      setMessage(`Published ${latestProductId}`);
+      toast.success(`Published ${latestProductId}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Publish failed");
+      toast.error(error instanceof Error ? error.message : "Publish failed");
     }
   }
 
   return (
     <main className="mx-auto max-w-3xl p-6">
-      <h1 className="text-2xl font-semibold">Seller Listings</h1>
-      <p className="mt-2 text-sm text-zinc-600">Create and publish listing flow.</p>
-      <div className="mt-4 grid gap-3">
-        <input
-          className="rounded border p-2 text-sm"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder="Title"
-        />
-        <input
-          className="rounded border p-2 text-sm"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          placeholder="Description"
-        />
-        <input
-          className="rounded border p-2 text-sm"
-          value={basePrice}
-          onChange={(event) => setBasePrice(event.target.value)}
-          placeholder="Base price"
-        />
-      </div>
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          className="rounded bg-zinc-900 px-4 py-2 text-sm text-white"
-          onClick={handleCreate}
-        >
-          Create Listing
-        </button>
-        <button
-          type="button"
-          className="rounded border px-4 py-2 text-sm"
-          onClick={handlePublish}
-        >
-          Publish Latest
-        </button>
-      </div>
-      <p className="mt-3 text-sm text-zinc-700">{message}</p>
+      <Card>
+        <CardHeader>
+          <CardTitle>Seller Listings</CardTitle>
+          <CardDescription>Create and publish listing flow.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="grid gap-4" onSubmit={handleSubmit(handleCreate)}>
+            <div className="grid gap-2">
+              <Label htmlFor="title">Title</Label>
+              <Input id="title" {...register("title")} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="description">Description</Label>
+              <Textarea id="description" {...register("description")} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="basePrice">Base price</Label>
+              <Input
+                id="basePrice"
+                type="number"
+                {...register("basePrice", { valueAsNumber: true })}
+              />
+            </div>
+            <div className="mt-2 flex gap-2">
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? "Creating..." : "Create Listing"}
+              </Button>
+              <Button type="button" variant="outline" onClick={handlePublish}>
+                Publish Latest
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }

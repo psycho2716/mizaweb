@@ -1,20 +1,21 @@
-/* eslint-disable @next/next/no-assign-module-variable */
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { checkoutCart, getOrderMessages, getOrders, sendOrderMessage } from "@/lib/api/endpoints";
+import {
+    getOrderMessages,
+    getOrders,
+    sendOrderMessage,
+    updateOrderStatus
+} from "@/lib/api/endpoints";
 import type { Order, OrderMessage } from "@/types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-export default function BuyerOrdersPage() {
+export default function SellerOrdersPage() {
     const [orders, setOrders] = useState<Order[]>([]);
-    const [paymentMethod, setPaymentMethod] = useState<"cash" | "online">("cash");
-    const [paymentReference, setPaymentReference] = useState("");
-    const [loading, setLoading] = useState(false);
     const [activeOrderId, setActiveOrderId] = useState("");
     const [messages, setMessages] = useState<OrderMessage[]>([]);
     const [messageInput, setMessageInput] = useState("");
@@ -24,36 +25,32 @@ export default function BuyerOrdersPage() {
         [orders]
     );
 
-    async function refreshOrders() {
-        try {
-            const response = await getOrders();
-            setOrders(response.data);
-        } catch {
-            setOrders([]);
-        }
+    async function handleStatusUpdate(
+        orderId: string,
+        status: "confirmed" | "processing" | "shipped" | "delivered"
+    ) {
+        await updateOrderStatus(orderId, status);
+        const response = await getOrders();
+        setOrders(response.data);
     }
 
-    async function handleCheckout() {
-        setLoading(true);
-        try {
-            await checkoutCart({
-                paymentMethod,
-                ...(paymentMethod === "online" && paymentReference ? { paymentReference } : {})
-            });
-            await refreshOrders();
-        } finally {
-            setLoading(false);
-        }
+    async function handleSendMessage() {
+        if (!activeOrderId || !messageInput.trim()) return;
+        await sendOrderMessage(activeOrderId, messageInput.trim());
+        setMessageInput("");
     }
 
     useEffect(() => {
-        void refreshOrders();
-        const token = localStorage.getItem("miza_token");
+        getOrders()
+            .then((response) => {
+                setOrders(response.data);
+            })
+            .catch(() => {
+                setOrders([]);
+            });
         const rawUser = localStorage.getItem("miza_user");
         const user = rawUser ? (JSON.parse(rawUser) as { id: string }) : null;
-        const socket: Socket = io(BACKEND_URL, {
-            transports: ["websocket"]
-        });
+        const socket: Socket = io(BACKEND_URL, { transports: ["websocket"] });
         if (user?.id) {
             socket.emit("join:channel", `user:${user.id}`);
         }
@@ -76,10 +73,6 @@ export default function BuyerOrdersPage() {
                 );
             });
         });
-        if (!token) {
-            socket.disconnect();
-        }
-
         return () => {
             socket.disconnect();
         };
@@ -87,7 +80,6 @@ export default function BuyerOrdersPage() {
 
     useEffect(() => {
         if (!activeOrderId) {
-            setMessages([]);
             return;
         }
         getOrderMessages(activeOrderId)
@@ -95,52 +87,11 @@ export default function BuyerOrdersPage() {
             .catch(() => setMessages([]));
     }, [activeOrderId]);
 
-    async function handleSendMessage() {
-        if (!activeOrderId || !messageInput.trim()) return;
-        await sendOrderMessage(activeOrderId, messageInput.trim());
-        setMessageInput("");
-    }
-
     return (
-        <main className="mx-auto max-w-4xl space-y-4 p-6">
+        <main className="mx-auto max-w-5xl space-y-4 p-6">
             <Card>
                 <CardHeader>
-                    <CardTitle>Checkout</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    <label className="block text-sm">
-                        <span className="mb-1 block">Payment method</span>
-                        <select
-                            className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
-                            value={paymentMethod}
-                            onChange={(event) =>
-                                setPaymentMethod(event.target.value as "cash" | "online")
-                            }
-                        >
-                            <option value="cash">Cash</option>
-                            <option value="online">Online payment (seller QR)</option>
-                        </select>
-                    </label>
-                    {paymentMethod === "online" ? (
-                        <label className="block text-sm">
-                            <span className="mb-1 block">Payment reference</span>
-                            <input
-                                className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
-                                value={paymentReference}
-                                onChange={(event) => setPaymentReference(event.target.value)}
-                                placeholder="Transaction or reference number"
-                            />
-                        </label>
-                    ) : null}
-                    <Button onClick={() => void handleCheckout()} disabled={loading}>
-                        {loading ? "Processing..." : "Checkout cart"}
-                    </Button>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>My Orders</CardTitle>
+                    <CardTitle>Seller Orders</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
                     {sortedOrders.map((order) => (
@@ -149,22 +100,51 @@ export default function BuyerOrdersPage() {
                             <p>Status: {order.status}</p>
                             <p>Payment: {order.paymentMethod}</p>
                             <p>Total: PHP {order.totalAmount}</p>
-                            <p className="text-zinc-600">
-                                {new Date(order.createdAt).toLocaleString()}
-                            </p>
-                            <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="mt-2"
-                                onClick={() => setActiveOrderId(order.id)}
-                            >
-                                Open chat
-                            </Button>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handleStatusUpdate(order.id, "confirmed")}
+                                >
+                                    Confirm
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handleStatusUpdate(order.id, "processing")}
+                                >
+                                    Processing
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handleStatusUpdate(order.id, "shipped")}
+                                >
+                                    Shipped
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handleStatusUpdate(order.id, "delivered")}
+                                >
+                                    Delivered
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => setActiveOrderId(order.id)}
+                                >
+                                    Open chat
+                                </Button>
+                            </div>
                         </div>
                     ))}
                     {sortedOrders.length === 0 ? (
-                        <p className="text-sm text-zinc-600">No orders yet.</p>
+                        <p className="text-sm text-zinc-600">No seller orders yet.</p>
                     ) : null}
                 </CardContent>
             </Card>
@@ -172,7 +152,7 @@ export default function BuyerOrdersPage() {
             {activeOrderId ? (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Order Chat: {activeOrderId}</CardTitle>
+                        <CardTitle>Buyer Chat: {activeOrderId}</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         <div className="max-h-64 space-y-2 overflow-auto rounded border border-zinc-200 p-3 text-sm">
@@ -194,7 +174,7 @@ export default function BuyerOrdersPage() {
                                 className="h-10 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm"
                                 value={messageInput}
                                 onChange={(event) => setMessageInput(event.target.value)}
-                                placeholder="Type your message to seller..."
+                                placeholder="Reply to buyer..."
                             />
                             <Button type="button" onClick={() => void handleSendMessage()}>
                                 Send

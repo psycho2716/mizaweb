@@ -1,48 +1,90 @@
 "use client";
 
-import { useState } from "react";
-import { loginWithUserId } from "@/lib/api/endpoints";
+import { zodResolver } from "@hookform/resolvers/zod";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
+import { z } from "zod";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { loginWithEmailPassword } from "@/lib/api/endpoints";
+import { loginSchema } from "@/types";
+
+type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
-  const [userId, setUserId] = useState("u-buyer-1");
-  const [message, setMessage] = useState("");
+  const router = useRouter();
+  const {
+    register,
+    handleSubmit,
+    formState: { isSubmitting, errors },
+  } = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: "",
+      password: "",
+    },
+  });
 
-  async function handleLogin() {
+  async function handleLogin(values: LoginFormValues) {
     try {
-      const result = await loginWithUserId(userId);
+      const result = await loginWithEmailPassword(values.email, values.password);
       localStorage.setItem("miza_token", result.token);
       localStorage.setItem("miza_user", JSON.stringify(result.user));
-      setMessage(`Logged in as ${result.user.role} (${result.user.email})`);
+      await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: result.token, role: result.user.role }),
+      });
+      if (result.user.role === "admin") {
+        router.push("/admin/verifications");
+      } else if (result.user.role === "seller") {
+        router.push("/seller/listings");
+      } else {
+        router.push("/products");
+      }
+      toast.success("Login successful");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Login failed");
+      toast.error(error instanceof Error ? error.message : "Login failed");
     }
   }
 
   return (
     <main className="mx-auto max-w-md p-6">
-      <h1 className="text-2xl font-semibold">Login</h1>
-      <p className="mt-2 text-sm text-zinc-600">Demo login (development mode).</p>
-      <label className="mt-4 block text-sm font-medium" htmlFor="user-id">
-        User ID
-      </label>
-      <select
-        id="user-id"
-        className="mt-2 w-full rounded border p-2 text-sm"
-        value={userId}
-        onChange={(event) => setUserId(event.target.value)}
-      >
-        <option value="u-buyer-1">u-buyer-1 (buyer)</option>
-        <option value="u-seller-1">u-seller-1 (seller)</option>
-        <option value="u-admin-1">u-admin-1 (admin)</option>
-      </select>
-      <button
-        type="button"
-        className="mt-4 rounded bg-zinc-900 px-4 py-2 text-sm text-white"
-        onClick={handleLogin}
-      >
-        Login
-      </button>
-      <p className="mt-3 text-sm text-zinc-700">{message}</p>
+      <Card>
+        <CardHeader>
+          <CardTitle>Welcome back</CardTitle>
+          <CardDescription>Sign in with your email and password.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={handleSubmit(handleLogin)}>
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" type="email" placeholder="name@example.com" {...register("email")} />
+              {errors.email ? <p className="text-sm text-red-600">{errors.email.message}</p> : null}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
+              <Input id="password" type="password" placeholder="********" {...register("password")} />
+              {errors.password ? (
+                <p className="text-sm text-red-600">{errors.password.message}</p>
+              ) : null}
+            </div>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Logging in..." : "Login"}
+            </Button>
+            <p className="text-sm text-zinc-600">
+              No account yet?{" "}
+              <Link href="/auth/register" className="font-medium text-zinc-900 underline">
+                Create account
+              </Link>
+            </p>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }

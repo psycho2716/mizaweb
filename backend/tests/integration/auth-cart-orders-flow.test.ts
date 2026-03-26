@@ -4,7 +4,10 @@ import { app } from "../../src/app";
 
 describe("auth + cart + checkout + orders flow", () => {
   it("issues JWT token on login", async () => {
-    const response = await request(app).post("/auth/login").send({ userId: "u-buyer-1" });
+    const response = await request(app).post("/auth/login").send({
+      email: "buyer@miza.dev",
+      password: "Buyer123!",
+    });
     expect(response.status).toBe(200);
     expect(typeof response.body.token).toBe("string");
     expect(response.body.token.length).toBeGreaterThan(20);
@@ -17,6 +20,7 @@ describe("auth + cart + checkout + orders flow", () => {
   });
 
   it("supports add-to-cart, checkout, and order retrieval", async () => {
+    const guestSessionId = "guest-test-1";
     const productResponse = await request(app)
       .post("/products")
       .set("x-user-id", "u-seller-1")
@@ -30,7 +34,7 @@ describe("auth + cart + checkout + orders flow", () => {
 
     const cartAddResponse = await request(app)
       .post("/cart/items")
-      .set("x-user-id", "u-buyer-1")
+      .set("x-guest-session-id", guestSessionId)
       .send({
         productId,
         quantity: 2,
@@ -40,7 +44,8 @@ describe("auth + cart + checkout + orders flow", () => {
     const checkoutResponse = await request(app)
       .post("/checkout")
       .set("x-user-id", "u-buyer-1")
-      .send({});
+      .set("x-guest-session-id", guestSessionId)
+      .send({ paymentMethod: "cash" });
     expect(checkoutResponse.status).toBe(201);
     const orderId = checkoutResponse.body.id as string;
 

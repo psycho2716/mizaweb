@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { approveVerification, listPendingVerifications } from "@/lib/api/endpoints";
 import type { VerificationSubmission } from "@/types";
 
@@ -40,35 +44,44 @@ export default function AdminVerificationsPage() {
     try {
       await approveVerification(id);
       setMessage(`Approved ${id}`);
+      toast.success(`Approved ${id}`);
       await refreshQueue();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Approve failed");
+      toast.error(error instanceof Error ? error.message : "Approve failed");
     }
   }
 
   return (
     <main className="mx-auto max-w-4xl p-6">
-      <h1 className="text-2xl font-semibold">Admin Verification Queue</h1>
-      <p className="mt-2 text-sm text-zinc-700">{message}</p>
-      <div className="mt-4 space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle>Admin Verification Queue</CardTitle>
+          <CardDescription>{message || "Review pending submissions."}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
         {queue.map((entry) => (
-          <div key={entry.id} className="rounded border p-3 text-sm">
+          <div key={entry.id} className="rounded border border-zinc-200 p-3 text-sm">
             <p>Submission: {entry.id}</p>
             <p>Seller: {entry.sellerId}</p>
-            <p>Status: {entry.status}</p>
-            <button
+            <p className="flex items-center gap-2">
+              Status: <Badge>{entry.status}</Badge>
+            </p>
+            <Button
               type="button"
-              className="mt-2 rounded bg-zinc-900 px-3 py-1 text-xs text-white"
+              size="sm"
+              className="mt-2"
               onClick={() => void handleApprove(entry.id)}
             >
               Approve
-            </button>
+            </Button>
           </div>
         ))}
         {queue.length === 0 ? (
           <p className="text-sm text-zinc-600">No pending submissions.</p>
         ) : null}
-      </div>
+        </CardContent>
+      </Card>
     </main>
   );
 }
