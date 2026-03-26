@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { app } from "../../src/app";
 
 describe("verification + publish restriction", () => {
+  it("creates verification upload target for seller", async () => {
+    const response = await request(app)
+      .post("/seller/verification/upload-url")
+      .set("x-user-id", "u-seller-1")
+      .send({ filename: "business-permit.pdf" });
+
+    expect(response.status).toBe(201);
+    expect(typeof response.body.path).toBe("string");
+    expect(typeof response.body.uploadUrl).toBe("string");
+  });
+
   it("blocks publish when seller is unverified", async () => {
     const createResponse = await request(app)
       .post("/products")

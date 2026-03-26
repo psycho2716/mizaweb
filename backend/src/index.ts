@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { Server as SocketServer } from "socket.io";
 import { app } from "./app";
 import { env } from "./config/env";
+import { initializePersistence } from "./integrations/supabase/persistence";
 
 const server = createServer(app);
 const io = new SocketServer(server, {
@@ -17,7 +18,12 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(env.PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`API running at http://localhost:${env.PORT}`);
-});
+async function startServer(): Promise<void> {
+  await initializePersistence();
+  server.listen(env.PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`API running at http://localhost:${env.PORT}`);
+  });
+}
+
+void startServer();

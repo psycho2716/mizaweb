@@ -10,6 +10,7 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().min(1).optional(),
   SUPABASE_ANON_KEY: z.string().min(1).optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  SUPABASE_VERIFICATION_BUCKET: z.string().min(1).default("verification-docs"),
   JWT_SECRET: z.string().min(16).default("replace-with-a-secure-secret"),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
   GOOGLE_DIRECTIONS_API_KEY: z.string().optional(),

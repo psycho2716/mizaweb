@@ -43,3 +43,23 @@ export interface OrderRecord {
   status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
   createdAt: string;
 }
+
+export interface ProductMedia {
+  id: string;
+  productId: string;
+  url: string;
+}
+
+export interface CustomizationOption {
+  id: string;
+  productId: string;
+  name: string;
+  values: string[];
+}
+
+export interface CustomizationRule {
+  id: string;
+  productId: string;
+  label: string;
+  amount: number;
+}

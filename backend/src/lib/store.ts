@@ -1,7 +1,10 @@
 import type {
   AuthUser,
   CartItem,
+  CustomizationOption,
+  CustomizationRule,
   OrderRecord,
+  ProductMedia,
   ProductRecord,
   VerificationStatus,
   VerificationSubmission,
@@ -13,6 +16,9 @@ const verifications = new Map<string, VerificationSubmission>();
 const products = new Map<string, ProductRecord>();
 const cartItems = new Map<string, CartItem>();
 const orders = new Map<string, OrderRecord>();
+const productMedia = new Map<string, ProductMedia>();
+const customizationOptions = new Map<string, CustomizationOption>();
+const customizationRules = new Map<string, CustomizationRule>();
 
 const seedUsers: AuthUser[] = [
   { id: "u-buyer-1", email: "buyer@miza.dev", role: "buyer" },
@@ -32,4 +38,9 @@ export const db = {
   products,
   cartItems,
   orders,
+  productMedia,
+  customizationOptions,
+  customizationRules,
 };
+
+export const defaultSeedUsers = seedUsers;
