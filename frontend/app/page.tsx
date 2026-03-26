@@ -1,37 +1,27 @@
 import Link from "next/link";
 
-import { getAppName } from "@/lib/utils";
-
 export default function Home() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-6">
-      <div className="w-full max-w-md bg-white rounded-xl border border-zinc-200 p-6">
-        <h1 className="text-2xl font-semibold">{getAppName()}</h1>
-        <p className="text-zinc-600 mt-2">
-          AI-powered, customizable natural stone marketplace — catalog, customization, 3D preview, checkout, and seller map.
-        </p>
-
-        <div className="mt-6 flex flex-col gap-3">
-          <Link
-            href="/catalog"
-            className="h-10 inline-flex items-center justify-center rounded-md border border-zinc-300 text-zinc-900 hover:bg-zinc-50"
-          >
-            Browse catalog
-          </Link>
-          <Link
-            href="/auth/login"
-            className="h-10 inline-flex items-center justify-center rounded-md bg-zinc-900 text-white hover:bg-zinc-800"
-          >
-            Login
-          </Link>
-          <Link
-            href="/auth/register"
-            className="h-10 inline-flex items-center justify-center rounded-md border border-zinc-300 text-zinc-900 hover:bg-zinc-50"
-          >
-            Create account
-          </Link>
-        </div>
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-12">
+      <h1 className="text-3xl font-semibold">Romblon Stone Marketplace</h1>
+      <p className="max-w-2xl text-sm text-zinc-600">
+        Production scaffold is ready. Use the links below to test core phase
+        flows: verification gate, listings, admin review, and buyer discovery.
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Link className="rounded border p-4" href="/products">
+          Browse Products
+        </Link>
+        <Link className="rounded border p-4" href="/seller/listings">
+          Seller Listings
+        </Link>
+        <Link className="rounded border p-4" href="/seller/verification">
+          Seller Verification
+        </Link>
+        <Link className="rounded border p-4" href="/admin/verifications">
+          Admin Verification Queue
+        </Link>
       </div>
-    </div>
+    </main>
   );
 }

@@ -1,7 +1,8 @@
-export type SellerVerificationStatus = "pending" | "approved" | "rejected";
-
-export interface SellerVerification {
-  seller_id: string;
-  status: SellerVerificationStatus;
+export interface VerificationSubmission {
+  id: string;
+  sellerId: string;
+  permitFileUrl: string;
+  status: "pending" | "approved" | "rejected";
+  note?: string;
+  rejectionReason?: string;
 }
-

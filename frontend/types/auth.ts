@@ -1,20 +1,7 @@
-export type UserRole = "admin" | "seller" | "customer";
+export type UserRole = "buyer" | "seller" | "admin";
 
-export type SellerOrCustomerRole = Exclude<UserRole, "admin">;
-
-export interface LoginFormData {
+export interface AuthUser {
+  id: string;
   email: string;
-  password: string;
+  role: UserRole;
 }
-
-export interface RegisterFormData {
-  fullName: string;
-  email: string;
-  password: string;
-  role: SellerOrCustomerRole;
-}
-
-export interface ForgotPasswordFormData {
-  email: string;
-}
-

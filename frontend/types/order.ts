@@ -1,8 +1,4 @@
-export type OrderStatus = "pending" | "confirmed" | "shipped" | "completed" | "cancelled";
-
-export interface OrderSummary {
+export interface Order {
   id: string;
-  order_status: OrderStatus;
-  total_amount: number;
+  status: string;
 }
-
