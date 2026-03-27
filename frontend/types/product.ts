@@ -5,6 +5,7 @@ export interface Product {
   description: string;
   basePrice: number;
   isPublished: boolean;
+  model3dUrl?: string;
 }
 
 export interface ProductMedia {
@@ -30,11 +31,13 @@ export interface ProductRule {
 export interface ProductDetail extends Product {
   media: ProductMedia[];
   options: ProductOption[];
+  rules: ProductRule[];
 }
 
 export interface SellerPublicProfile {
   id: string;
   email: string;
+  fullName?: string;
   sellerId: string;
   businessName: string;
   contactNumber: string;
@@ -43,5 +46,14 @@ export interface SellerPublicProfile {
   publishedProducts: number;
   profileImageUrl?: string;
   storeBackgroundUrl?: string;
-  paymentQrUrl?: string;
+  paymentMethods: SellerPaymentMethod[];
+}
+
+export interface SellerPaymentMethod {
+  id: string;
+  sellerId: string;
+  methodName: string;
+  accountName: string;
+  accountNumber: string;
+  qrImageUrl?: string;
 }

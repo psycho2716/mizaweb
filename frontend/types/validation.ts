@@ -24,8 +24,3 @@ export const createListingSchema = z.object({
     description: z.string().min(3, "Description is required"),
     basePrice: z.number().positive("Price must be positive")
 });
-
-export const sellerVerificationSchema = z.object({
-    fileName: z.string().min(3, "File name is required"),
-    permitFileUrl: z.string().url("Permit file URL must be valid")
-});

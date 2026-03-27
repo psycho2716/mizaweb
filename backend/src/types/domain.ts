@@ -16,7 +16,15 @@ export interface SellerProfile {
     address: string;
     profileImageUrl?: string;
     storeBackgroundUrl?: string;
-    paymentQrUrl?: string;
+}
+
+export interface SellerPaymentMethod {
+    id: string;
+    sellerId: string;
+    methodName: string;
+    accountName: string;
+    accountNumber: string;
+    qrImageUrl?: string;
 }
 
 export interface ProductRecord {
@@ -26,6 +34,7 @@ export interface ProductRecord {
     description: string;
     basePrice: number;
     isPublished: boolean;
+    model3dUrl?: string;
 }
 
 export interface VerificationSubmission {
@@ -52,6 +61,9 @@ export interface OrderRecord {
     status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
     paymentMethod: "cash" | "online";
     paymentReference?: string;
+    paymentStatus: "pending" | "paid";
+    receiptStatus: "none" | "submitted" | "resubmit_requested" | "approved";
+    receiptRequestNote?: string;
     totalAmount: number;
     createdAt: string;
 }

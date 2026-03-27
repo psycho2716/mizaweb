@@ -7,7 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     getOrderMessages,
     getOrders,
+    requestReceiptResubmission,
     sendOrderMessage,
+    updateOrderPaymentStatus,
     updateOrderStatus
 } from "@/lib/api/endpoints";
 import type { Order, OrderMessage } from "@/types";
@@ -19,17 +21,39 @@ export default function SellerOrdersPage() {
     const [activeOrderId, setActiveOrderId] = useState("");
     const [messages, setMessages] = useState<OrderMessage[]>([]);
     const [messageInput, setMessageInput] = useState("");
+    const [receiptNoteByOrder, setReceiptNoteByOrder] = useState<Record<string, string>>({});
 
     const sortedOrders = useMemo(
         () => [...orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
         [orders]
     );
 
+    function canTransition(order: Order, target: "confirmed" | "shipped" | "delivered"): boolean {
+        if (target === "confirmed") return order.status === "created";
+        if (target === "shipped") return order.status === "confirmed" || order.status === "processing";
+        if (target === "delivered") return order.status === "shipped";
+        return false;
+    }
+
     async function handleStatusUpdate(
         orderId: string,
         status: "confirmed" | "processing" | "shipped" | "delivered"
     ) {
         await updateOrderStatus(orderId, status);
+        const response = await getOrders();
+        setOrders(response.data);
+    }
+
+    async function handlePaymentStatus(orderId: string, paymentStatus: "pending" | "paid") {
+        await updateOrderPaymentStatus(orderId, paymentStatus);
+        const response = await getOrders();
+        setOrders(response.data);
+    }
+
+    async function handleReceiptRequest(orderId: string) {
+        const note = receiptNoteByOrder[orderId]?.trim();
+        if (!note) return;
+        await requestReceiptResubmission(orderId, note);
         const response = await getOrders();
         setOrders(response.data);
     }
@@ -98,7 +122,14 @@ export default function SellerOrdersPage() {
                         <div key={order.id} className="rounded border border-zinc-200 p-3 text-sm">
                             <p className="font-medium">{order.id}</p>
                             <p>Status: {order.status}</p>
-                            <p>Payment: {order.paymentMethod}</p>
+                            <p>Payment method: {order.paymentMethod}</p>
+                            <p>Payment status: {order.paymentStatus}</p>
+                            <p>Receipt status: {order.receiptStatus}</p>
+                            {order.receiptRequestNote ? (
+                                <p className="text-xs text-zinc-500">
+                                    Last receipt request: {order.receiptRequestNote}
+                                </p>
+                            ) : null}
                             <p>Total: PHP {order.totalAmount}</p>
                             <div className="mt-2 flex flex-wrap gap-2">
                                 <Button
@@ -106,6 +137,7 @@ export default function SellerOrdersPage() {
                                     size="sm"
                                     variant="outline"
                                     onClick={() => void handleStatusUpdate(order.id, "confirmed")}
+                                    disabled={!canTransition(order, "confirmed")}
                                 >
                                     Confirm
                                 </Button>
@@ -113,15 +145,8 @@ export default function SellerOrdersPage() {
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => void handleStatusUpdate(order.id, "processing")}
-                                >
-                                    Processing
-                                </Button>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
                                     onClick={() => void handleStatusUpdate(order.id, "shipped")}
+                                    disabled={!canTransition(order, "shipped")}
                                 >
                                     Shipped
                                 </Button>
@@ -130,8 +155,18 @@ export default function SellerOrdersPage() {
                                     size="sm"
                                     variant="outline"
                                     onClick={() => void handleStatusUpdate(order.id, "delivered")}
+                                    disabled={!canTransition(order, "delivered")}
                                 >
                                     Delivered
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void handlePaymentStatus(order.id, "paid")}
+                                    disabled={order.paymentStatus === "paid"}
+                                >
+                                    Mark Paid
                                 </Button>
                                 <Button
                                     type="button"
@@ -141,6 +176,31 @@ export default function SellerOrdersPage() {
                                     Open chat
                                 </Button>
                             </div>
+                            {order.paymentMethod === "online" ? (
+                                <div className="mt-2 grid gap-2">
+                                    <input
+                                        className="h-9 rounded-md border border-zinc-300 bg-white px-3 text-xs"
+                                        value={receiptNoteByOrder[order.id] ?? ""}
+                                        onChange={(event) =>
+                                            setReceiptNoteByOrder((previous) => ({
+                                                ...previous,
+                                                [order.id]: event.target.value
+                                            }))
+                                        }
+                                        placeholder="Request another receipt (reason)"
+                                    />
+                                    <div>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => void handleReceiptRequest(order.id)}
+                                        >
+                                            Request New Receipt
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
                     ))}
                     {sortedOrders.length === 0 ? (

@@ -2,6 +2,7 @@ import type {
   AuthUser,
   CartItem,
   SellerProfile,
+  SellerPaymentMethod,
   CustomizationOption,
   CustomizationRule,
   OrderMessage,
@@ -16,6 +17,7 @@ import { hashPassword } from "./password";
 const users = new Map<string, AuthUser>();
 const credentials = new Map<string, { userId: string; passwordHash: string }>();
 const sellerProfiles = new Map<string, SellerProfile>();
+const sellerPaymentMethods = new Map<string, SellerPaymentMethod>();
 const sellerStatus = new Map<string, VerificationStatus>();
 const verifications = new Map<string, VerificationSubmission>();
 const products = new Map<string, ProductRecord>();
@@ -59,6 +61,7 @@ export const db = {
   users,
   credentials,
   sellerProfiles,
+  sellerPaymentMethods,
   sellerStatus,
   verifications,
   products,

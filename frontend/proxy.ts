@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 function getRoleRedirect(role: string): string {
   if (role === "admin") return "/admin/verifications";
-  if (role === "seller") return "/seller/listings";
+  if (role === "seller") return "/seller/dashboard";
   if (role === "buyer") return "/buyer/orders";
   return "/products";
 }
@@ -38,5 +38,12 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/auth/login", "/auth/register", "/seller/:path*", "/admin/:path*", "/buyer/:path*"],
+  matcher: [
+    "/auth/login",
+    "/auth/register",
+    "/seller",
+    "/seller/:path*",
+    "/admin/:path*",
+    "/buyer/:path*",
+  ],
 };

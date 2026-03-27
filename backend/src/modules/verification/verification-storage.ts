@@ -15,9 +15,10 @@ export interface VerificationUploadTarget {
 export async function generateVerificationUploadTarget(
   sellerId: string,
   filename: string,
+  kind: "verification" | "profile" | "background" | "payment-qr" = "verification",
 ): Promise<VerificationUploadTarget> {
   const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const path = `${sellerId}/${Date.now()}-${safeFilename}`;
+  const path = `${sellerId}/${kind}/${Date.now()}-${safeFilename}`;
 
   if (!isSupabaseConfigured()) {
     return {

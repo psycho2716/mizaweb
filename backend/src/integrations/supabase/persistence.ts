@@ -1,4 +1,5 @@
-import { db, defaultSeedCredentials, defaultSeedUsers } from "../../lib/store";
+import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
+import { db } from "../../lib/store";
 import type {
     AuthUser,
     CartItem,
@@ -9,22 +10,62 @@ import type {
     ProductMedia,
     ProductRecord,
     SellerProfile,
+    SellerPaymentMethod,
+    UserRole,
     VerificationStatus,
     VerificationSubmission
 } from "../../types/domain";
 import { createSupabaseAdminClient, isSupabaseConfigured } from "./client";
 
-interface AppUserRow {
-    id: string;
-    email: string;
-    role: "buyer" | "seller" | "admin";
-    full_name?: string | null;
+function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
+    const role = u.user_metadata?.role;
+    if (role !== "buyer" && role !== "seller" && role !== "admin") {
+        return null;
+    }
+    return {
+        id: u.id,
+        email: u.email ?? "",
+        role: role as UserRole,
+        ...(u.user_metadata?.full_name
+            ? { fullName: String(u.user_metadata.full_name) }
+            : {})
+    };
 }
 
-interface UserCredentialRow {
-    user_id: string;
-    email: string;
-    password_hash: string;
+/** Merge a single Auth user into the runtime map (e.g. after JWT validation before full sync). */
+export function applyAuthUserToRuntime(u: SupabaseAuthUser): void {
+    const mapped = mapSupabaseAuthRecordToAuthUser(u);
+    if (mapped) {
+        db.users.set(mapped.id, mapped);
+    }
+}
+
+async function loadAuthUsersIntoRuntime(
+    supabase: NonNullable<ReturnType<typeof createSupabaseAdminClient>>
+): Promise<void> {
+    db.users.clear();
+    let page = 1;
+    const perPage = 1000;
+    for (;;) {
+        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+        if (error) {
+            console.error("[loadAuthUsersIntoRuntime]", error.message);
+            return;
+        }
+        if (!data?.users?.length) {
+            break;
+        }
+        for (const u of data.users) {
+            const mapped = mapSupabaseAuthRecordToAuthUser(u);
+            if (mapped) {
+                db.users.set(mapped.id, mapped);
+            }
+        }
+        if (data.users.length < perPage) {
+            break;
+        }
+        page += 1;
+    }
 }
 
 interface SellerStatusRow {
@@ -39,7 +80,15 @@ interface SellerProfileRow {
     address: string;
     profile_image_url: string | null;
     store_background_url: string | null;
-    payment_qr_url: string | null;
+}
+
+interface SellerPaymentMethodRow {
+    id: string;
+    seller_id: string;
+    method_name: string;
+    account_name: string;
+    account_number: string;
+    qr_image_url: string | null;
 }
 
 interface VerificationRow {
@@ -58,6 +107,7 @@ interface ProductRow {
     description: string;
     base_price: number;
     is_published: boolean;
+    model_3d_url: string | null;
 }
 
 interface ProductMediaRow {
@@ -95,6 +145,9 @@ interface OrderRow {
     status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
     payment_method: "cash" | "online";
     payment_reference: string | null;
+    payment_status: "pending" | "paid";
+    receipt_status: "none" | "submitted" | "resubmit_requested" | "approved";
+    receipt_request_note: string | null;
     total_amount: number;
     created_at: string;
 }
@@ -120,74 +173,33 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         return;
     }
 
-    await supabase.from("app_users").upsert(defaultSeedUsers, { onConflict: "id" });
-    await supabase
-        .from("app_seller_status")
-        .upsert([{ seller_id: "u-seller-1", status: "unsubmitted" }], {
-            onConflict: "seller_id"
-        });
-    await supabase.from("app_seller_profiles").upsert(
-        [...db.sellerProfiles.values()].map((profile) => ({
-            seller_id: profile.sellerId,
-            business_name: profile.businessName,
-            contact_number: profile.contactNumber,
-            address: profile.address,
-            profile_image_url: profile.profileImageUrl ?? null,
-            store_background_url: profile.storeBackgroundUrl ?? null,
-            payment_qr_url: profile.paymentQrUrl ?? null
-        })),
-        { onConflict: "seller_id" }
-    );
-
     const [
-        usersRes,
         statusRes,
         verificationRes,
         sellerProfileRes,
+        sellerPaymentMethodRes,
         productRes,
         mediaRes,
         optionRes,
         ruleRes,
         cartRes,
         orderRes,
-        messageRes,
-        credentialRes
+        messageRes
     ] = await Promise.all([
-        supabase.from("app_users").select("*"),
         supabase.from("app_seller_status").select("*"),
         supabase.from("app_verifications").select("*"),
         supabase.from("app_seller_profiles").select("*"),
+        supabase.from("app_seller_payment_methods").select("*"),
         supabase.from("app_products").select("*"),
         supabase.from("app_product_media").select("*"),
         supabase.from("app_customization_options").select("*"),
         supabase.from("app_customization_rules").select("*"),
         supabase.from("app_cart_items").select("*"),
         supabase.from("app_orders").select("*"),
-        supabase.from("app_order_messages").select("*"),
-        supabase.from("app_user_credentials").select("*")
+        supabase.from("app_order_messages").select("*")
     ]);
 
-    if (usersRes.data) {
-        db.users.clear();
-        for (const row of usersRes.data as AppUserRow[]) {
-            db.users.set(row.id, {
-                id: row.id,
-                email: row.email,
-                role: row.role,
-                ...(row.full_name ? { fullName: row.full_name } : {})
-            });
-        }
-    }
-
-    if (credentialRes.data) {
-        db.credentials.clear();
-        for (const row of credentialRes.data as UserCredentialRow[]) {
-            db.credentials.set(row.email.toLowerCase(), {
-                userId: row.user_id,
-                passwordHash: row.password_hash
-            });
-        }
-    }
+    await loadAuthUsersIntoRuntime(supabase);
 
     if (statusRes.data) {
         db.sellerStatus.clear();
@@ -207,10 +219,23 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 ...(row.profile_image_url ? { profileImageUrl: row.profile_image_url } : {}),
                 ...(row.store_background_url
                     ? { storeBackgroundUrl: row.store_background_url }
-                    : {}),
-                ...(row.payment_qr_url ? { paymentQrUrl: row.payment_qr_url } : {})
+                    : {})
             };
             db.sellerProfiles.set(row.seller_id, profile);
+        }
+    }
+
+    if (sellerPaymentMethodRes.data) {
+        db.sellerPaymentMethods.clear();
+        for (const row of sellerPaymentMethodRes.data as SellerPaymentMethodRow[]) {
+            db.sellerPaymentMethods.set(row.id, {
+                id: row.id,
+                sellerId: row.seller_id,
+                methodName: row.method_name,
+                accountName: row.account_name,
+                accountNumber: row.account_number,
+                ...(row.qr_image_url ? { qrImageUrl: row.qr_image_url } : {})
+            });
         }
     }
 
@@ -238,7 +263,8 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 title: row.title,
                 description: row.description,
                 basePrice: Number(row.base_price),
-                isPublished: row.is_published
+                isPublished: row.is_published,
+                ...(row.model_3d_url ? { model3dUrl: row.model_3d_url } : {})
             });
         }
     }
@@ -297,6 +323,11 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 status: row.status,
                 paymentMethod: row.payment_method,
                 ...(row.payment_reference ? { paymentReference: row.payment_reference } : {}),
+                paymentStatus: row.payment_status,
+                receiptStatus: row.receipt_status,
+                ...(row.receipt_request_note
+                    ? { receiptRequestNote: row.receipt_request_note }
+                    : {}),
                 totalAmount: Number(row.total_amount),
                 createdAt: row.created_at
             });
@@ -345,87 +376,70 @@ export async function initializePersistence(): Promise<void> {
     if (!isSupabaseConfigured()) {
         return;
     }
-    const supabase = createSupabaseAdminClient();
-    if (!supabase) {
-        return;
-    }
-
-    await supabase.from("app_users").upsert(defaultSeedUsers, { onConflict: "id" });
-    await supabase.from("app_user_credentials").upsert(
-        defaultSeedCredentials.map((credential) => ({
-            user_id: credential.userId,
-            email: credential.email.toLowerCase(),
-            password_hash: db.credentials.get(credential.email.toLowerCase())?.passwordHash ?? ""
-        })),
-        { onConflict: "email" }
-    );
-    await supabase
-        .from("app_seller_status")
-        .upsert([{ seller_id: "u-seller-1", status: "unsubmitted" }], {
-            onConflict: "seller_id"
-        });
-
     await syncFromSupabaseIfStale();
 }
 
-export function persistUser(user: AuthUser): void {
+export async function persistSellerStatus(
+    sellerId: string,
+    status: VerificationStatus
+): Promise<void> {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
-    void supabase
-        .from("app_users")
-        .upsert(
-            {
-                id: user.id,
-                email: user.email,
-                role: user.role,
-                full_name: user.fullName ?? null
-            },
-            { onConflict: "id" }
-        );
-}
-
-export function persistCredential(userId: string, email: string, passwordHash: string): void {
-    const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_user_credentials").upsert(
-        {
-            user_id: userId,
-            email: email.toLowerCase(),
-            password_hash: passwordHash
-        },
-        { onConflict: "email" }
-    );
-}
-
-export function persistSellerStatus(sellerId: string, status: VerificationStatus): void {
-    const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase
+    const { error } = await supabase
         .from("app_seller_status")
         .upsert({ seller_id: sellerId, status }, { onConflict: "seller_id" });
+    if (error) {
+        console.error("[persistSellerStatus]", error.message);
+        throw new Error(`Failed to persist seller status: ${error.message}`);
+    }
 }
 
-export function persistSellerProfile(profile: SellerProfile): void {
+export async function persistSellerProfile(profile: SellerProfile): Promise<void> {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
-    void supabase.from("app_seller_profiles").upsert(
+    const { error } = await supabase.from("app_seller_profiles").upsert(
         {
             seller_id: profile.sellerId,
             business_name: profile.businessName,
             contact_number: profile.contactNumber,
             address: profile.address,
             profile_image_url: profile.profileImageUrl ?? null,
-            store_background_url: profile.storeBackgroundUrl ?? null,
-            payment_qr_url: profile.paymentQrUrl ?? null
+            store_background_url: profile.storeBackgroundUrl ?? null
         },
         { onConflict: "seller_id" }
     );
+    if (error) {
+        console.error("[persistSellerProfile]", error.message);
+        throw new Error(`Failed to persist seller profile: ${error.message}`);
+    }
 }
 
-export function persistVerification(row: VerificationSubmission): void {
+export function persistSellerPaymentMethod(row: SellerPaymentMethod): void {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
-    void supabase.from("app_verifications").upsert(
+    void supabase.from("app_seller_payment_methods").upsert(
+        {
+            id: row.id,
+            seller_id: row.sellerId,
+            method_name: row.methodName,
+            account_name: row.accountName,
+            account_number: row.accountNumber,
+            qr_image_url: row.qrImageUrl ?? null
+        },
+        { onConflict: "id" }
+    );
+}
+
+export function deleteSellerPaymentMethod(id: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_seller_payment_methods").delete().eq("id", id);
+}
+
+export async function persistVerification(row: VerificationSubmission): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    const { error } = await supabase.from("app_verifications").upsert(
         {
             id: row.id,
             seller_id: row.sellerId,
@@ -436,6 +450,10 @@ export function persistVerification(row: VerificationSubmission): void {
         },
         { onConflict: "id" }
     );
+    if (error) {
+        console.error("[persistVerification]", error.message);
+        throw new Error(`Failed to persist verification: ${error.message}`);
+    }
 }
 
 export function persistProduct(row: ProductRecord): void {
@@ -448,10 +466,17 @@ export function persistProduct(row: ProductRecord): void {
             title: row.title,
             description: row.description,
             base_price: row.basePrice,
-            is_published: row.isPublished
+            is_published: row.isPublished,
+            model_3d_url: row.model3dUrl ?? null
         },
         { onConflict: "id" }
     );
+}
+
+export function deleteProduct(productId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_products").delete().eq("id", productId);
 }
 
 export function persistProductMedia(row: ProductMedia): void {
@@ -490,6 +515,24 @@ export function persistCustomizationRule(row: CustomizationRule): void {
         );
 }
 
+export function deleteCustomizationOptionsByProduct(productId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_customization_options").delete().eq("product_id", productId);
+}
+
+export function deleteCustomizationRulesByProduct(productId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_customization_rules").delete().eq("product_id", productId);
+}
+
+export function deleteProductMediaByProduct(productId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_product_media").delete().eq("product_id", productId);
+}
+
 export function persistCartItem(row: CartItem): void {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
@@ -522,6 +565,9 @@ export function persistOrder(row: OrderRecord): void {
             status: row.status,
             payment_method: row.paymentMethod,
             payment_reference: row.paymentReference ?? null,
+            payment_status: row.paymentStatus,
+            receipt_status: row.receiptStatus,
+            receipt_request_note: row.receiptRequestNote ?? null,
             total_amount: row.totalAmount,
             created_at: row.createdAt
         },

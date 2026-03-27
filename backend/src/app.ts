@@ -9,23 +9,32 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { env } from "./config/env";
 import { authorizeRole } from "./middleware/authorize-role";
-import { authenticate } from "./middleware/authenticate";
+import { authenticate, resolveOptionalAuthUserId } from "./middleware/authenticate";
 import { db } from "./lib/store";
-import { isSupabaseConfigured } from "./integrations/supabase/client";
+import {
+    createSupabaseAdminClient,
+    createSupabaseAnonClient,
+    isSupabaseAuthReady,
+    isSupabaseConfigured
+} from "./integrations/supabase/client";
 import {
     deleteCartItem,
+    deleteCustomizationOptionsByProduct,
+    deleteCustomizationRulesByProduct,
+    deleteProduct,
     deleteProductMedia,
+    deleteProductMediaByProduct,
+    deleteSellerPaymentMethod,
     persistCartItem,
-    persistCredential,
     persistCustomizationOption,
     persistCustomizationRule,
     persistOrder,
     persistOrderMessage,
     persistProduct,
     persistProductMedia,
+    persistSellerPaymentMethod,
     persistSellerStatus,
     persistSellerProfile,
-    persistUser,
     persistVerification,
     syncFromSupabaseIfStale
 } from "./integrations/supabase/persistence";
@@ -62,23 +71,6 @@ function getGuestSessionId(request: express.Request): string | null {
     return sessionId && sessionId.trim().length > 0 ? sessionId.trim() : null;
 }
 
-function getOptionalAuthUserId(request: express.Request): string | null {
-    const authorization = request.header("authorization");
-    if (!authorization?.startsWith("Bearer ")) {
-        return null;
-    }
-    const token = authorization.replace("Bearer ", "").trim();
-    try {
-        const payload = jwt.verify(token, env.JWT_SECRET) as { sub?: string };
-        if (payload.sub && db.users.has(payload.sub)) {
-            return payload.sub;
-        }
-    } catch {
-        return null;
-    }
-    return null;
-}
-
 app.get("/health", (_request, response) => {
     response.json({
         ok: true,
@@ -88,7 +80,7 @@ app.get("/health", (_request, response) => {
     });
 });
 
-app.post("/auth/register", authLimiter, (request, response) => {
+app.post("/auth/register", authLimiter, async (request, response) => {
     const schema = z
         .object({
             email: z.string().email(),
@@ -146,6 +138,97 @@ app.post("/auth/register", authLimiter, (request, response) => {
         return;
     }
 
+    if (isSupabaseAuthReady()) {
+        const admin = createSupabaseAdminClient();
+        const anon = createSupabaseAnonClient();
+        if (!admin || !anon) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+
+        const { data: created, error: createErr } = await admin.auth.admin.createUser({
+            email: normalizedEmail,
+            password: parsed.data.password,
+            email_confirm: true,
+            user_metadata: {
+                role: parsed.data.role,
+                ...(parsed.data.fullName ? { full_name: parsed.data.fullName } : {})
+            }
+        });
+
+        if (createErr || !created.user) {
+            const msg = createErr?.message ?? "Registration failed";
+            const lower = msg.toLowerCase();
+            if (lower.includes("already") || lower.includes("registered")) {
+                response.status(409).json({ error: "Email is already registered" });
+                return;
+            }
+            response.status(400).json({ error: msg });
+            return;
+        }
+
+        const id = created.user.id;
+        const user = {
+            id,
+            email: normalizedEmail,
+            role: parsed.data.role,
+            ...(parsed.data.fullName ? { fullName: parsed.data.fullName } : {})
+        };
+
+        db.users.set(id, user);
+        if (user.role === "seller") {
+            db.sellerStatus.set(id, "unsubmitted");
+            db.sellerProfiles.set(id, {
+                sellerId: id,
+                businessName: parsed.data.businessName as string,
+                contactNumber: parsed.data.contactNumber as string,
+                address: parsed.data.address as string
+            });
+        }
+
+        try {
+            if (user.role === "seller") {
+                await persistSellerStatus(id, "unsubmitted");
+                await persistSellerProfile(db.sellerProfiles.get(id)!);
+            }
+        } catch (error) {
+            await admin.auth.admin.deleteUser(id);
+            db.users.delete(id);
+            if (user.role === "seller") {
+                db.sellerStatus.delete(id);
+                db.sellerProfiles.delete(id);
+            }
+            console.error("[register] persist", error);
+            response.status(500).json({
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to save account. Please try again."
+            });
+            return;
+        }
+
+        const { data: sessionData, error: signErr } = await anon.auth.signInWithPassword({
+            email: normalizedEmail,
+            password: parsed.data.password
+        });
+
+        if (signErr || !sessionData.session) {
+            console.error("[register] signIn", signErr);
+            response.status(500).json({
+                error: signErr?.message ?? "Failed to create session"
+            });
+            return;
+        }
+
+        response.status(201).json({
+            token: sessionData.session.access_token,
+            refreshToken: sessionData.session.refresh_token,
+            user
+        });
+        return;
+    }
+
     const id = `u-${randomUUID()}`;
     const user = {
         id,
@@ -156,8 +239,6 @@ app.post("/auth/register", authLimiter, (request, response) => {
     const passwordHash = hashPassword(parsed.data.password);
     db.users.set(id, user);
     db.credentials.set(normalizedEmail, { userId: id, passwordHash });
-    persistUser(user);
-    persistCredential(id, normalizedEmail, passwordHash);
     if (user.role === "seller") {
         db.sellerStatus.set(id, "unsubmitted");
         db.sellerProfiles.set(id, {
@@ -166,8 +247,28 @@ app.post("/auth/register", authLimiter, (request, response) => {
             contactNumber: parsed.data.contactNumber as string,
             address: parsed.data.address as string
         });
-        persistSellerStatus(id, "unsubmitted");
-        persistSellerProfile(db.sellerProfiles.get(id)!);
+    }
+
+    try {
+        if (user.role === "seller") {
+            await persistSellerStatus(id, "unsubmitted");
+            await persistSellerProfile(db.sellerProfiles.get(id)!);
+        }
+    } catch (error) {
+        db.users.delete(id);
+        db.credentials.delete(normalizedEmail);
+        if (user.role === "seller") {
+            db.sellerStatus.delete(id);
+            db.sellerProfiles.delete(id);
+        }
+        console.error("[register] persist", error);
+        response.status(500).json({
+            error:
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save account. Please try again."
+        });
+        return;
     }
 
     const token = jwt.sign({ sub: user.id, role: user.role }, env.JWT_SECRET, {
@@ -177,7 +278,7 @@ app.post("/auth/register", authLimiter, (request, response) => {
     response.status(201).json({ token, user });
 });
 
-app.post("/auth/login", authLimiter, (request, response) => {
+app.post("/auth/login", authLimiter, async (request, response) => {
     const schema = z.object({
         email: z.string().email(),
         password: z.string().min(8).max(128)
@@ -189,6 +290,37 @@ app.post("/auth/login", authLimiter, (request, response) => {
     }
 
     const normalizedEmail = parsed.data.email.toLowerCase();
+
+    if (isSupabaseAuthReady()) {
+        const anon = createSupabaseAnonClient();
+        if (!anon) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { data, error } = await anon.auth.signInWithPassword({
+            email: normalizedEmail,
+            password: parsed.data.password
+        });
+        if (error || !data.session || !data.user) {
+            response.status(401).json({ error: "Invalid email or password" });
+            return;
+        }
+        await syncFromSupabaseIfStale();
+        const user = db.users.get(data.user.id);
+        if (!user) {
+            response.status(403).json({
+                error: "Account profile is missing. Contact support."
+            });
+            return;
+        }
+        response.json({
+            token: data.session.access_token,
+            refreshToken: data.session.refresh_token,
+            user
+        });
+        return;
+    }
+
     const credentials = db.credentials.get(normalizedEmail);
     if (!credentials || !verifyPassword(parsed.data.password, credentials.passwordHash)) {
         response.status(401).json({ error: "Invalid email or password" });
@@ -219,6 +351,9 @@ app.get("/sellers/:id/profile", (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
     const seller = db.users.get(id);
     const profile = db.sellerProfiles.get(id);
+    const paymentMethods = [...db.sellerPaymentMethods.values()].filter(
+        (entry) => entry.sellerId === id
+    );
     if (!seller || seller.role !== "seller" || !profile) {
         response.status(404).json({ error: "Seller profile not found" });
         return;
@@ -228,6 +363,7 @@ app.get("/sellers/:id/profile", (request, response) => {
             id: seller.id,
             email: seller.email,
             ...profile,
+            paymentMethods,
             verificationStatus: db.sellerStatus.get(id) ?? "unsubmitted",
             publishedProducts: [...db.products.values()].filter(
                 (product) => product.sellerId === id && product.isPublished
@@ -237,22 +373,34 @@ app.get("/sellers/:id/profile", (request, response) => {
 });
 
 app.get("/seller/profile", authenticate, authorizeRole(["seller"]), (request, response) => {
-    const profile = db.sellerProfiles.get(request.authUserId as string);
+    const sellerId = request.authUserId as string;
+    const profile = db.sellerProfiles.get(sellerId);
+    const user = db.users.get(sellerId);
     if (!profile) {
         response.status(404).json({ error: "Seller profile not found" });
         return;
     }
-    response.json({ data: profile });
+    response.json({
+        data: {
+            id: sellerId,
+            ...profile,
+            paymentMethods: [...db.sellerPaymentMethods.values()].filter(
+                (entry) => entry.sellerId === sellerId
+            ),
+            fullName: user?.fullName,
+            email: user?.email
+        }
+    });
 });
 
-app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const schema = z.object({
+        fullName: z.string().min(2).max(120).optional(),
         businessName: z.string().min(2).max(120).optional(),
         contactNumber: z.string().min(7).max(40).optional(),
         address: z.string().min(3).max(255).optional(),
         profileImageUrl: z.string().url().optional(),
-        storeBackgroundUrl: z.string().url().optional(),
-        paymentQrUrl: z.string().url().optional()
+        storeBackgroundUrl: z.string().url().optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -266,6 +414,14 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), (request, 
         return;
     }
 
+    const previous = {
+        businessName: profile.businessName,
+        contactNumber: profile.contactNumber,
+        address: profile.address,
+        profileImageUrl: profile.profileImageUrl,
+        storeBackgroundUrl: profile.storeBackgroundUrl
+    };
+
     profile.businessName = parsed.data.businessName ?? profile.businessName;
     profile.contactNumber = parsed.data.contactNumber ?? profile.contactNumber;
     profile.address = parsed.data.address ?? profile.address;
@@ -275,13 +431,253 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), (request, 
     if (parsed.data.storeBackgroundUrl) {
         profile.storeBackgroundUrl = parsed.data.storeBackgroundUrl;
     }
-    if (parsed.data.paymentQrUrl) {
-        profile.paymentQrUrl = parsed.data.paymentQrUrl;
+
+    const sellerId = request.authUserId as string;
+    const user = db.users.get(sellerId);
+    const previousFullName = user?.fullName;
+    if (user && parsed.data.fullName) {
+        user.fullName = parsed.data.fullName;
     }
-    persistSellerProfile(profile);
+
+    try {
+        if (user && parsed.data.fullName && isSupabaseAuthReady()) {
+            const supabase = createSupabaseAdminClient();
+            if (supabase) {
+                const { error } = await supabase.auth.admin.updateUserById(sellerId, {
+                    user_metadata: {
+                        role: user.role,
+                        full_name: parsed.data.fullName
+                    }
+                });
+                if (error) {
+                    throw new Error(error.message);
+                }
+            }
+        }
+        await persistSellerProfile(profile);
+    } catch (error) {
+        if (user) {
+            if (previousFullName !== undefined) {
+                user.fullName = previousFullName;
+            } else {
+                delete user.fullName;
+            }
+        }
+        profile.businessName = previous.businessName;
+        profile.contactNumber = previous.contactNumber;
+        profile.address = previous.address;
+        if (previous.profileImageUrl !== undefined) {
+            profile.profileImageUrl = previous.profileImageUrl;
+        } else {
+            delete profile.profileImageUrl;
+        }
+        if (previous.storeBackgroundUrl !== undefined) {
+            profile.storeBackgroundUrl = previous.storeBackgroundUrl;
+        } else {
+            delete profile.storeBackgroundUrl;
+        }
+        console.error("[seller/profile] persist", error);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Failed to update profile"
+        });
+        return;
+    }
 
     response.json({ ok: true, data: profile });
 });
+
+app.get(
+    "/seller/payment-methods",
+    authenticate,
+    authorizeRole(["seller"]),
+    (request, response) => {
+        const sellerId = request.authUserId as string;
+        const data = [...db.sellerPaymentMethods.values()].filter(
+            (entry) => entry.sellerId === sellerId
+        );
+        response.json({ data });
+    }
+);
+
+app.post(
+    "/seller/payment-methods",
+    authenticate,
+    authorizeRole(["seller"]),
+    (request, response) => {
+        const schema = z.object({
+            methodName: z.string().min(2).max(60),
+            accountName: z.string().min(2).max(120),
+            accountNumber: z.string().min(2).max(80),
+            qrImageUrl: z.string().url().optional()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const id = `spm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const row = {
+            id,
+            sellerId: request.authUserId as string,
+            methodName: parsed.data.methodName,
+            accountName: parsed.data.accountName,
+            accountNumber: parsed.data.accountNumber,
+            ...(parsed.data.qrImageUrl ? { qrImageUrl: parsed.data.qrImageUrl } : {})
+        };
+        db.sellerPaymentMethods.set(id, row);
+        persistSellerPaymentMethod(row);
+        response.status(201).json({ data: row });
+    }
+);
+
+app.patch(
+    "/seller/payment-methods/:id",
+    authenticate,
+    authorizeRole(["seller"]),
+    (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const row = db.sellerPaymentMethods.get(id);
+        if (!row || row.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Payment method not found" });
+            return;
+        }
+        const schema = z.object({
+            methodName: z.string().min(2).max(60).optional(),
+            accountName: z.string().min(2).max(120).optional(),
+            accountNumber: z.string().min(2).max(80).optional(),
+            qrImageUrl: z.string().url().optional()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        row.methodName = parsed.data.methodName ?? row.methodName;
+        row.accountName = parsed.data.accountName ?? row.accountName;
+        row.accountNumber = parsed.data.accountNumber ?? row.accountNumber;
+        if (parsed.data.qrImageUrl) {
+            row.qrImageUrl = parsed.data.qrImageUrl;
+        }
+        persistSellerPaymentMethod(row);
+        response.json({ data: row });
+    }
+);
+
+app.delete(
+    "/seller/payment-methods/:id",
+    authenticate,
+    authorizeRole(["seller"]),
+    (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const row = db.sellerPaymentMethods.get(id);
+        if (!row || row.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Payment method not found" });
+            return;
+        }
+        db.sellerPaymentMethods.delete(id);
+        deleteSellerPaymentMethod(id);
+        response.json({ ok: true });
+    }
+);
+
+app.patch(
+    "/seller/account/password",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        if (!isSupabaseAuthReady()) {
+            response.status(503).json({ error: "Password update requires Supabase Auth setup" });
+            return;
+        }
+        const schema = z.object({
+            currentPassword: z.string().min(8),
+            newPassword: z.string().min(8).max(128)
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const user = db.users.get(request.authUserId as string);
+        if (!user) {
+            response.status(404).json({ error: "User not found" });
+            return;
+        }
+        const anon = createSupabaseAnonClient();
+        const admin = createSupabaseAdminClient();
+        if (!anon || !admin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error: signErr } = await anon.auth.signInWithPassword({
+            email: user.email,
+            password: parsed.data.currentPassword
+        });
+        if (signErr) {
+            response.status(401).json({ error: "Current password is incorrect" });
+            return;
+        }
+        const { error: updateErr } = await admin.auth.admin.updateUserById(user.id, {
+            password: parsed.data.newPassword
+        });
+        if (updateErr) {
+            response.status(500).json({ error: updateErr.message });
+            return;
+        }
+        response.json({ ok: true });
+    }
+);
+
+app.delete(
+    "/seller/account",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        if (!isSupabaseAuthReady()) {
+            response.status(503).json({ error: "Account deletion requires Supabase Auth setup" });
+            return;
+        }
+        const schema = z.object({ password: z.string().min(8) });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const user = db.users.get(request.authUserId as string);
+        if (!user) {
+            response.status(404).json({ error: "User not found" });
+            return;
+        }
+        const anon = createSupabaseAnonClient();
+        const admin = createSupabaseAdminClient();
+        if (!anon || !admin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error: signErr } = await anon.auth.signInWithPassword({
+            email: user.email,
+            password: parsed.data.password
+        });
+        if (signErr) {
+            response.status(401).json({ error: "Password is incorrect" });
+            return;
+        }
+        const { error: deleteErr } = await admin.auth.admin.deleteUser(user.id);
+        if (deleteErr) {
+            response.status(500).json({ error: deleteErr.message });
+            return;
+        }
+        db.users.delete(user.id);
+        db.sellerProfiles.delete(user.id);
+        db.sellerStatus.delete(user.id);
+        for (const method of [...db.sellerPaymentMethods.values()]) {
+            if (method.sellerId === user.id) {
+                db.sellerPaymentMethods.delete(method.id);
+            }
+        }
+        response.json({ ok: true });
+    }
+);
 
 app.post(
     "/seller/verification/upload-url",
@@ -307,10 +703,35 @@ app.post(
 );
 
 app.post(
+    "/seller/assets/upload-url",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const schema = z.object({
+            filename: z.string().min(3).max(255),
+            kind: z.enum(["profile", "background", "payment-qr"])
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+
+        const target = await generateVerificationUploadTarget(
+            request.authUserId as string,
+            parsed.data.filename,
+            parsed.data.kind
+        );
+
+        response.status(201).json(target);
+    }
+);
+
+app.post(
     "/seller/verification/submit",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const schema = z.object({
             permitFileUrl: z.string().url(),
             note: z.string().max(1000).optional()
@@ -329,12 +750,18 @@ app.post(
             status: "pending" as const,
             ...(parsed.data.note ? { note: parsed.data.note } : {})
         };
-        db.verifications.set(id, {
-            ...submission
-        });
+        try {
+            await persistVerification(submission);
+            await persistSellerStatus(request.authUserId as string, "pending");
+        } catch (error) {
+            console.error("[verification/submit]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to save verification"
+            });
+            return;
+        }
+        db.verifications.set(id, { ...submission });
         db.sellerStatus.set(request.authUserId as string, "pending");
-        persistVerification(submission);
-        persistSellerStatus(request.authUserId as string, "pending");
         response.status(201).json({ id, status: "pending" });
     }
 );
@@ -344,8 +771,17 @@ app.get(
     authenticate,
     authorizeRole(["seller"]),
     (request, response) => {
+        const sellerId = request.authUserId as string;
+        const status = db.sellerStatus.get(sellerId) ?? "unsubmitted";
+        const rejectedForSeller = [...db.verifications.values()]
+            .filter((v) => v.sellerId === sellerId && v.status === "rejected")
+            .sort((a, b) => b.id.localeCompare(a.id));
+        const latestRejected = rejectedForSeller[0];
         response.json({
-            status: db.sellerStatus.get(request.authUserId as string) ?? "unsubmitted"
+            status,
+            ...(status === "rejected" && latestRejected?.rejectionReason
+                ? { rejectionReason: latestRejected.rejectionReason }
+                : {})
         });
     }
 );
@@ -354,7 +790,7 @@ app.post(
     "/seller/verification/resubmit",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const schema = z.object({
             permitFileUrl: z.string().url(),
             note: z.string().max(1000).optional()
@@ -373,19 +809,47 @@ app.post(
             status: "pending" as const,
             ...(parsed.data.note ? { note: parsed.data.note } : {})
         };
+        try {
+            await persistVerification(submission);
+            await persistSellerStatus(request.authUserId as string, "pending");
+        } catch (error) {
+            console.error("[verification/resubmit]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to save verification"
+            });
+            return;
+        }
         db.verifications.set(id, submission);
         db.sellerStatus.set(request.authUserId as string, "pending");
-        persistVerification(submission);
-        persistSellerStatus(request.authUserId as string, "pending");
         response.status(201).json({ id, status: "pending" });
     }
 );
 
 app.get("/admin/verifications", authenticate, authorizeRole(["admin"]), (request, response) => {
     const status = request.query.status;
-    const rows = [...db.verifications.values()].filter((entry) =>
+    const rows = [...db.verifications.values()]
+        .filter((entry) =>
         typeof status === "string" ? entry.status === status : true
-    );
+        )
+        .map((entry) => {
+            const seller = db.users.get(entry.sellerId);
+            const profile = db.sellerProfiles.get(entry.sellerId);
+            const paymentMethods = [...db.sellerPaymentMethods.values()].filter(
+                (method) => method.sellerId === entry.sellerId
+            );
+            return {
+                ...entry,
+                seller: seller
+                    ? {
+                          id: seller.id,
+                          email: seller.email,
+                          fullName: seller.fullName
+                      }
+                    : null,
+                profile: profile ?? null,
+                paymentMethods
+            };
+        });
     response.json({ data: rows });
 });
 
@@ -396,24 +860,56 @@ app.get("/admin/verifications/:id", authenticate, authorizeRole(["admin"]), (req
         response.status(404).json({ error: "Not found" });
         return;
     }
-    response.json({ data: verification });
+    const seller = db.users.get(verification.sellerId);
+    const profile = db.sellerProfiles.get(verification.sellerId);
+    const paymentMethods = [...db.sellerPaymentMethods.values()].filter(
+        (method) => method.sellerId === verification.sellerId
+    );
+    response.json({
+        data: {
+            ...verification,
+            seller: seller
+                ? {
+                      id: seller.id,
+                      email: seller.email,
+                      fullName: seller.fullName
+                  }
+                : null,
+            profile: profile ?? null,
+            paymentMethods
+        }
+    });
 });
 
 app.post(
     "/admin/verifications/:id/approve",
     authenticate,
     authorizeRole(["admin"]),
-    (request, response) => {
+    async (request, response) => {
         const id = z.string().min(1).parse(request.params.id);
         const verification = db.verifications.get(id);
         if (!verification) {
             response.status(404).json({ error: "Not found" });
             return;
         }
+        const previousStatus = verification.status;
+        const previousSellerStatus = db.sellerStatus.get(verification.sellerId);
         verification.status = "approved";
+        try {
+            await persistVerification(verification);
+            await persistSellerStatus(verification.sellerId, "approved");
+        } catch (error) {
+            verification.status = previousStatus;
+            if (previousSellerStatus !== undefined) {
+                db.sellerStatus.set(verification.sellerId, previousSellerStatus);
+            }
+            console.error("[admin/approve]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to persist approval"
+            });
+            return;
+        }
         db.sellerStatus.set(verification.sellerId, "approved");
-        persistVerification(verification);
-        persistSellerStatus(verification.sellerId, "approved");
         response.json({ ok: true });
     }
 );
@@ -422,7 +918,7 @@ app.post(
     "/admin/verifications/:id/reject",
     authenticate,
     authorizeRole(["admin"]),
-    (request, response) => {
+    async (request, response) => {
         const schema = z.object({ reason: z.string().min(3).max(500) });
         const parsed = schema.safeParse(request.body);
         if (!parsed.success) {
@@ -436,14 +932,86 @@ app.post(
             response.status(404).json({ error: "Not found" });
             return;
         }
+        const previousStatus = verification.status;
+        const previousReason = verification.rejectionReason;
+        const previousSellerStatus = db.sellerStatus.get(verification.sellerId);
         verification.status = "rejected";
         verification.rejectionReason = parsed.data.reason;
+        try {
+            await persistVerification(verification);
+            await persistSellerStatus(verification.sellerId, "rejected");
+        } catch (error) {
+            verification.status = previousStatus;
+            if (previousReason !== undefined) {
+                verification.rejectionReason = previousReason;
+            } else {
+                delete verification.rejectionReason;
+            }
+            if (previousSellerStatus !== undefined) {
+                db.sellerStatus.set(verification.sellerId, previousSellerStatus);
+            }
+            console.error("[admin/reject]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to persist rejection"
+            });
+            return;
+        }
         db.sellerStatus.set(verification.sellerId, "rejected");
-        persistVerification(verification);
-        persistSellerStatus(verification.sellerId, "rejected");
         response.json({ ok: true });
     }
 );
+
+app.get("/seller/analytics", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const sellerId = request.authUserId as string;
+    const orders = [...db.orders.values()].filter((entry) => entry.sellerId === sellerId);
+    const now = new Date();
+    const thisMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    const paidOrders = orders.filter((entry) => entry.paymentStatus === "paid");
+    const monthlyRevenue = paidOrders
+        .filter((entry) => entry.createdAt.slice(0, 7) === thisMonth)
+        .reduce((sum, entry) => sum + entry.totalAmount, 0);
+    const pendingOrders = orders.filter(
+        (entry) => entry.status === "created" || entry.status === "confirmed"
+    ).length;
+    const toShipOrders = orders.filter((entry) => entry.status === "processing").length;
+    const deliveredOrders = orders.filter((entry) => entry.status === "delivered").length;
+    const unpaidOnlineOrders = orders.filter(
+        (entry) => entry.paymentMethod === "online" && entry.paymentStatus !== "paid"
+    ).length;
+    const products = [...db.products.values()].filter((entry) => entry.sellerId === sellerId);
+    const publishedProducts = products.filter((entry) => entry.isPublished).length;
+
+    response.json({
+        data: {
+            monthlyRevenue,
+            pendingOrders,
+            toShipOrders,
+            deliveredOrders,
+            unpaidOnlineOrders,
+            totalProducts: products.length,
+            publishedProducts
+        }
+    });
+});
+
+app.get("/seller/products", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const sellerId = request.authUserId as string;
+    const data = [...db.products.values()].filter((row) => row.sellerId === sellerId);
+    response.json({ data });
+});
+
+app.get("/seller/products/:id", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const product = db.products.get(id);
+    if (!product || product.sellerId !== request.authUserId) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    const media = [...db.productMedia.values()].filter((entry) => entry.productId === id);
+    const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
+    const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
+    response.json({ data: { ...product, media, options, rules } });
+});
 
 app.post("/products", authenticate, authorizeRole(["seller"]), (request, response) => {
     const schema = z.object({
@@ -481,7 +1049,8 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, re
     const schema = z.object({
         title: z.string().min(2).optional(),
         description: z.string().min(3).optional(),
-        basePrice: z.number().positive().optional()
+        basePrice: z.number().positive().optional(),
+        model3dUrl: z.string().url().optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -491,6 +1060,9 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, re
     product.title = parsed.data.title ?? product.title;
     product.description = parsed.data.description ?? product.description;
     product.basePrice = parsed.data.basePrice ?? product.basePrice;
+    if (parsed.data.model3dUrl) {
+        product.model3dUrl = parsed.data.model3dUrl;
+    }
     persistProduct(product);
     response.json({ ok: true, data: product });
 });
@@ -545,7 +1117,38 @@ app.get("/products/:id", (_request, response) => {
     }
     const media = [...db.productMedia.values()].filter((entry) => entry.productId === id);
     const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
-    response.json({ data: { ...product, media, options } });
+    const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
+    response.json({ data: { ...product, media, options, rules } });
+});
+
+app.delete("/products/:id", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const product = db.products.get(id);
+    if (!product || product.sellerId !== request.authUserId) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    db.products.delete(id);
+    for (const media of [...db.productMedia.values()]) {
+        if (media.productId === id) {
+            db.productMedia.delete(media.id);
+        }
+    }
+    for (const option of [...db.customizationOptions.values()]) {
+        if (option.productId === id) {
+            db.customizationOptions.delete(option.id);
+        }
+    }
+    for (const rule of [...db.customizationRules.values()]) {
+        if (rule.productId === id) {
+            db.customizationRules.delete(rule.id);
+        }
+    }
+    deleteProductMediaByProduct(id);
+    deleteCustomizationOptionsByProduct(id);
+    deleteCustomizationRulesByProduct(id);
+    deleteProduct(id);
+    response.json({ ok: true });
 });
 
 app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), (request, response) => {
@@ -697,8 +1300,8 @@ app.post("/products/:id/price-preview", (request, response) => {
     response.json({ basePrice: product.basePrice, total });
 });
 
-app.get("/cart", (request, response) => {
-    const authUserId = getOptionalAuthUserId(request);
+app.get("/cart", async (request, response) => {
+    const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
     if (authUserId) {
         const user = db.users.get(authUserId);
@@ -722,7 +1325,7 @@ app.get("/cart", (request, response) => {
     response.json({ data: items });
 });
 
-app.post("/cart/items", (request, response) => {
+app.post("/cart/items", async (request, response) => {
     const schema = z.object({
         productId: z.string().min(1),
         quantity: z.number().int().positive()
@@ -733,7 +1336,7 @@ app.post("/cart/items", (request, response) => {
         return;
     }
     const id = `ci-${Date.now()}`;
-    const authUserId = getOptionalAuthUserId(request);
+    const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
 
     if (!authUserId && !guestSessionId) {
@@ -754,10 +1357,10 @@ app.post("/cart/items", (request, response) => {
     response.status(201).json({ id });
 });
 
-app.patch("/cart/items/:itemId", (request, response) => {
+app.patch("/cart/items/:itemId", async (request, response) => {
     const itemId = z.string().min(1).parse(request.params.itemId);
     const cartItem = db.cartItems.get(itemId);
-    const authUserId = getOptionalAuthUserId(request);
+    const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
     const isOwner = authUserId
         ? cartItem?.buyerId === authUserId
@@ -777,10 +1380,10 @@ app.patch("/cart/items/:itemId", (request, response) => {
     response.json({ ok: true, data: cartItem });
 });
 
-app.delete("/cart/items/:itemId", (request, response) => {
+app.delete("/cart/items/:itemId", async (request, response) => {
     const itemId = z.string().min(1).parse(request.params.itemId);
     const cartItem = db.cartItems.get(itemId);
-    const authUserId = getOptionalAuthUserId(request);
+    const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
     const isOwner = authUserId
         ? cartItem?.buyerId === authUserId
@@ -855,6 +1458,11 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), (request, response
         status: "created" as const,
         paymentMethod: parsed.data.paymentMethod,
         ...(parsed.data.paymentReference ? { paymentReference: parsed.data.paymentReference } : {}),
+        paymentStatus: "pending" as const,
+        receiptStatus:
+            parsed.data.paymentMethod === "online"
+                ? (parsed.data.paymentReference ? ("submitted" as const) : ("none" as const))
+                : ("none" as const),
         totalAmount,
         createdAt: new Date().toISOString()
     };
@@ -985,10 +1593,99 @@ app.post(
             response.status(403).json({ error: "Forbidden" });
             return;
         }
+        const transitions: Record<string, string[]> = {
+            created: ["confirmed"],
+            confirmed: ["processing", "shipped"],
+            processing: ["shipped"],
+            shipped: ["delivered"],
+            delivered: []
+        };
+        const allowed = transitions[order.status] ?? [];
+        if (!allowed.includes(parsed.data.status) && parsed.data.status !== order.status) {
+            response.status(400).json({ error: "Invalid status transition" });
+            return;
+        }
         order.status = parsed.data.status;
         persistOrder(order);
         emitOrderUpdated(order);
         response.json({ ok: true, status: order.status });
+    }
+);
+
+app.post(
+    "/orders/:id/payment-status",
+    authenticate,
+    authorizeRole(["seller", "admin"]),
+    (request, response) => {
+        const schema = z.object({
+            paymentStatus: z.enum(["pending", "paid"])
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const orderId = z.string().min(1).parse(request.params.id);
+        const order = db.orders.get(orderId);
+        if (!order) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        const actor = db.users.get(request.authUserId as string);
+        if (actor?.role === "seller" && order.sellerId !== actor.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.paymentMethod === "cash" && parsed.data.paymentStatus === "pending") {
+            response.status(400).json({ error: "Cash payments cannot be reverted to pending." });
+            return;
+        }
+        order.paymentStatus = parsed.data.paymentStatus;
+        if (order.paymentStatus === "paid") {
+            order.receiptStatus =
+                order.paymentMethod === "online" && order.paymentReference ? "approved" : "none";
+            delete order.receiptRequestNote;
+        }
+        persistOrder(order);
+        emitOrderUpdated(order);
+        response.json({ ok: true, paymentStatus: order.paymentStatus });
+    }
+);
+
+app.post(
+    "/orders/:id/request-receipt",
+    authenticate,
+    authorizeRole(["seller", "admin"]),
+    (request, response) => {
+        const schema = z.object({
+            note: z.string().min(5).max(500)
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const orderId = z.string().min(1).parse(request.params.id);
+        const order = db.orders.get(orderId);
+        if (!order) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        const actor = db.users.get(request.authUserId as string);
+        if (actor?.role === "seller" && order.sellerId !== actor.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.paymentMethod !== "online") {
+            response.status(400).json({ error: "Receipt request is only for online payments." });
+            return;
+        }
+        order.paymentStatus = "pending";
+        order.receiptStatus = "resubmit_requested";
+        order.receiptRequestNote = parsed.data.note;
+        persistOrder(order);
+        emitOrderUpdated(order);
+        response.json({ ok: true, receiptStatus: order.receiptStatus });
     }
 );
 

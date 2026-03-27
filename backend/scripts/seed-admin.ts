@@ -1,54 +1,64 @@
 /**
- * Upserts the platform admin into Supabase (`app_users` + `app_user_credentials`).
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in env (e.g. backend/.env).
+ * Seeds the platform admin in Supabase Auth only (`auth.users` + `user_metadata`).
+ * Role and display name live in `user_metadata`; `public.app_users` is not used.
  *
- * Usage: npx tsx scripts/seed-admin.ts
+ * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in backend/.env.
+ *
+ * Usage: npm run seed:admin
  * Default credentials: admin@miza.dev / Admin123!
  */
 
 import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { resolve } from "node:path";
-import { hashPassword } from "../src/lib/password";
 
 config({ path: resolve(__dirname, "../.env") });
 
-const ADMIN_ID = process.env.ADMIN_ID ?? "u-admin-1";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@miza.dev";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "Admin123!";
 
+function isDuplicateAuthError(message: string): boolean {
+    const m = message.toLowerCase();
+    return (
+        m.includes("already been registered") ||
+        m.includes("already registered") ||
+        m.includes("duplicate") ||
+        m.includes("user already registered")
+    );
+}
+
 async function main(): Promise<void> {
     const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) {
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !serviceKey) {
         throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
     }
 
-    const supabase = createClient(url, key);
-    const passwordHash = hashPassword(ADMIN_PASSWORD);
+    const supabase = createClient(url, serviceKey);
 
-    const { error: userError } = await supabase.from("app_users").upsert(
-        {
-            id: ADMIN_ID,
-            email: ADMIN_EMAIL,
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        email: ADMIN_EMAIL,
+        password: ADMIN_PASSWORD,
+        email_confirm: true,
+        user_metadata: {
             role: "admin",
             full_name: "Platform Admin"
-        },
-        { onConflict: "id" }
-    );
-    if (userError) throw userError;
+        }
+    });
 
-    const { error: credError } = await supabase.from("app_user_credentials").upsert(
-        {
-            user_id: ADMIN_ID,
-            email: ADMIN_EMAIL.toLowerCase(),
-            password_hash: passwordHash
-        },
-        { onConflict: "user_id" }
-    );
-    if (credError) throw credError;
+    if (createErr) {
+        if (!isDuplicateAuthError(createErr.message)) {
+            throw createErr;
+        }
+        process.stdout.write(`Admin already exists in Auth: ${ADMIN_EMAIL}\n`);
+        return;
+    }
 
-    process.stdout.write(`Admin seeded: ${ADMIN_EMAIL} (id: ${ADMIN_ID})\n`);
+    if (!created.user?.id) {
+        throw new Error("Auth createUser returned no user");
+    }
+
+    process.stdout.write(`Admin seeded in Auth: ${ADMIN_EMAIL} (id: ${created.user.id})\n`);
 }
 
 void main().catch((error) => {

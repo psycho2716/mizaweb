@@ -5,11 +5,24 @@ export interface ApiError {
 import type { AuthUser } from "./auth";
 import type { Order, OrderMessage } from "./order";
 import type { Product } from "./product";
-import type { VerificationSubmission } from "./admin";
+import type { AdminVerificationItem, VerificationSubmission } from "./admin";
 import type { ProductDetail, SellerPublicProfile } from "./product";
+import type { SellerPaymentMethod } from "./product";
+
+export interface SellerAnalytics {
+  monthlyRevenue: number;
+  pendingOrders: number;
+  toShipOrders: number;
+  deliveredOrders: number;
+  unpaidOnlineOrders: number;
+  totalProducts: number;
+  publishedProducts: number;
+}
 
 export interface AuthLoginResponse {
   token: string;
+  /** Present when using Supabase Auth sessions (access token in `token`). */
+  refreshToken?: string;
   user: AuthUser;
 }
 
@@ -28,6 +41,14 @@ export interface ProductDetailResponse {
 
 export interface SellerProfileResponse {
   data: SellerPublicProfile;
+}
+
+export interface SellerAnalyticsResponse {
+  data: SellerAnalytics;
+}
+
+export interface SellerPaymentMethodsResponse {
+  data: SellerPaymentMethod[];
 }
 
 export interface CartItemResponse {
@@ -66,6 +87,30 @@ export interface ProductCreateResponse {
 
 export interface VerificationStatusResponse {
   status: string;
+  /** Present when the seller is rejected; admin message explaining why. */
+  rejectionReason?: string;
+}
+
+/** UI phases for the seller verification status page (no form; permit is collected at registration). */
+export type SellerVerificationUiPhase =
+  | "loading"
+  | "error"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "unsubmitted";
+
+/** Maps `/seller/verification/status` response to a single UI phase. */
+export function toSellerVerificationUiPhase(status: string): SellerVerificationUiPhase {
+  if (
+    status === "pending" ||
+    status === "approved" ||
+    status === "rejected" ||
+    status === "unsubmitted"
+  ) {
+    return status;
+  }
+  return "unsubmitted";
 }
 
 export interface VerificationSubmitResponse {
@@ -74,7 +119,7 @@ export interface VerificationSubmitResponse {
 }
 
 export interface VerificationQueueResponse {
-  data: VerificationSubmission[];
+  data: AdminVerificationItem[];
 }
 
 export interface VerificationUploadTarget {
