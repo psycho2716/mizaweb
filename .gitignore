@@ -7,3 +7,5 @@ frontend/.next/
 backend/dist/
 .DS_Store
 supabase/.temp/
+
+BUILD_PLAN.md
