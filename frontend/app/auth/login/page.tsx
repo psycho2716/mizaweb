@@ -118,7 +118,7 @@ export default function LoginPage() {
                                     id="email"
                                     type="email"
                                     placeholder="name@company.com"
-                                    className="h-11 border-x-0 border-t-0 border-b-(--border) rounded-none bg-transparent px-0 text-base text-foreground placeholder:text-(--muted) focus-visible:ring-0"
+                                    className="h-11 border-x-0 border-t-0 border-b-(--border) rounded-none bg-transparent px-2 text-base text-foreground placeholder:text-(--muted) focus-visible:ring-0"
                                     {...register("email")}
                                 />
                                 {errors.email ? (
@@ -138,12 +138,12 @@ export default function LoginPage() {
                                         id="password"
                                         type={showPassword ? "text" : "password"}
                                         placeholder="Enter password"
-                                        className="h-11 border-x-0 border-t-0 border-b-(--border) rounded-none bg-transparent px-0 pr-10 text-base text-foreground placeholder:text-(--muted) focus-visible:ring-0"
+                                        className="h-11 border-x-0 border-t-0 border-b-(--border) rounded-none bg-transparent px-2 pr-10 text-base text-foreground placeholder:text-(--muted) focus-visible:ring-0"
                                         {...register("password")}
                                     />
                                     <button
                                         type="button"
-                                        className="absolute right-0 top-1/2 -translate-y-1/2 text-(--muted) hover:text-foreground"
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-(--muted) hover:text-foreground"
                                         onClick={() => setShowPassword((prev) => !prev)}
                                         aria-label={
                                             showPassword ? "Hide password" : "Show password"

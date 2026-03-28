@@ -5,7 +5,7 @@ export interface ApiError {
 import type { AuthUser } from "./auth";
 import type { Order, OrderMessage } from "./order";
 import type { Product } from "./product";
-import type { AdminVerificationItem, VerificationSubmission } from "./admin";
+import type { AdminUserListItem, AdminVerificationItem } from "./admin";
 import type { ProductDetail, SellerPublicProfile } from "./product";
 import type { SellerPaymentMethod } from "./product";
 
@@ -118,8 +118,22 @@ export interface VerificationSubmitResponse {
   status: "pending";
 }
 
+/** Shared shape for paginated admin list endpoints. */
+export interface ListPaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface VerificationQueueResponse {
   data: AdminVerificationItem[];
+  pagination: ListPaginationMeta;
+}
+
+export interface AdminUsersListResponse {
+  data: AdminUserListItem[];
+  pagination: ListPaginationMeta;
 }
 
 export interface VerificationUploadTarget {

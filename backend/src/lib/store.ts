@@ -55,6 +55,8 @@ sellerProfiles.set("u-seller-1", {
   businessName: "Romblon Stone Craft",
   contactNumber: "+639000000001",
   address: "Romblon, Philippines",
+  shopLatitude: 12.5755,
+  shopLongitude: 122.2707
 });
 
 export const db = {

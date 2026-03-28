@@ -17,18 +17,30 @@ import type {
 } from "../../types/domain";
 import { createSupabaseAdminClient, isSupabaseConfigured } from "./client";
 
+function isAuthUserBanned(u: SupabaseAuthUser): boolean {
+    const raw = (u as { banned_until?: string | null }).banned_until;
+    if (!raw) {
+        return false;
+    }
+    const until = new Date(raw).getTime();
+    return Number.isFinite(until) && until > Date.now();
+}
+
 function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
     const role = u.user_metadata?.role;
     if (role !== "buyer" && role !== "seller" && role !== "admin") {
         return null;
     }
+    const suspended =
+        isAuthUserBanned(u) || u.user_metadata?.suspended === true || u.user_metadata?.suspended === "true";
     return {
         id: u.id,
         email: u.email ?? "",
         role: role as UserRole,
         ...(u.user_metadata?.full_name
             ? { fullName: String(u.user_metadata.full_name) }
-            : {})
+            : {}),
+        ...(suspended ? { suspended: true } : {})
     };
 }
 
@@ -78,6 +90,8 @@ interface SellerProfileRow {
     business_name: string;
     contact_number: string;
     address: string;
+    shop_latitude: number | null;
+    shop_longitude: number | null;
     profile_image_url: string | null;
     store_background_url: string | null;
 }
@@ -95,6 +109,7 @@ interface VerificationRow {
     id: string;
     seller_id: string;
     permit_file_url: string;
+    permit_object_path?: string | null;
     status: "pending" | "approved" | "rejected";
     note: string | null;
     rejection_reason: string | null;
@@ -216,6 +231,9 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 businessName: row.business_name,
                 contactNumber: row.contact_number,
                 address: row.address,
+                ...(row.shop_latitude != null && row.shop_longitude != null
+                    ? { shopLatitude: row.shop_latitude, shopLongitude: row.shop_longitude }
+                    : {}),
                 ...(row.profile_image_url ? { profileImageUrl: row.profile_image_url } : {}),
                 ...(row.store_background_url
                     ? { storeBackgroundUrl: row.store_background_url }
@@ -247,6 +265,9 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 sellerId: row.seller_id,
                 permitFileUrl: row.permit_file_url,
                 status: row.status,
+                ...(row.permit_object_path && row.permit_object_path.length > 0
+                    ? { permitObjectPath: row.permit_object_path }
+                    : {}),
                 ...(row.note ? { note: row.note } : {}),
                 ...(row.rejection_reason ? { rejectionReason: row.rejection_reason } : {})
             };
@@ -403,6 +424,8 @@ export async function persistSellerProfile(profile: SellerProfile): Promise<void
             business_name: profile.businessName,
             contact_number: profile.contactNumber,
             address: profile.address,
+            shop_latitude: profile.shopLatitude ?? null,
+            shop_longitude: profile.shopLongitude ?? null,
             profile_image_url: profile.profileImageUrl ?? null,
             store_background_url: profile.storeBackgroundUrl ?? null
         },
@@ -444,6 +467,7 @@ export async function persistVerification(row: VerificationSubmission): Promise<
             id: row.id,
             seller_id: row.sellerId,
             permit_file_url: row.permitFileUrl,
+            permit_object_path: row.permitObjectPath ?? null,
             status: row.status,
             note: row.note ?? null,
             rejection_reason: row.rejectionReason ?? null
@@ -454,6 +478,24 @@ export async function persistVerification(row: VerificationSubmission): Promise<
         console.error("[persistVerification]", error.message);
         throw new Error(`Failed to persist verification: ${error.message}`);
     }
+}
+
+export function deleteVerificationById(id: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_verifications").delete().eq("id", id);
+}
+
+export function deleteSellerProfileBySellerId(sellerId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_seller_profiles").delete().eq("seller_id", sellerId);
+}
+
+export function deleteSellerStatusBySellerId(sellerId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_seller_status").delete().eq("seller_id", sellerId);
 }
 
 export function persistProduct(row: ProductRecord): void {

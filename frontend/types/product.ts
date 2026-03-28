@@ -42,6 +42,9 @@ export interface SellerPublicProfile {
   businessName: string;
   contactNumber: string;
   address: string;
+  /** WGS84 coordinates when the seller pinned their shop (e.g. at registration). */
+  shopLatitude?: number;
+  shopLongitude?: number;
   verificationStatus: string;
   publishedProducts: number;
   profileImageUrl?: string;

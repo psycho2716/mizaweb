@@ -22,7 +22,9 @@ function UserProfileMenu({ user, onLogout }: UserProfileMenuProps) {
                 aria-label="Account menu"
             >
                 <User className="h-4 w-4 shrink-0 text-(--muted)" aria-hidden />
-                <span className="max-w-[140px] truncate">{user.fullName?.trim() || user.email}</span>
+                {/* <span className="max-w-[140px] truncate">
+                    {user.fullName?.trim() || user.email}
+                </span> */}
                 <ChevronDown className="h-4 w-4 shrink-0 text-(--muted)" aria-hidden />
             </summary>
             <div
@@ -138,7 +140,10 @@ export function SiteHeader() {
                 </Link>
                 <div className="flex flex-wrap items-center justify-end gap-x-1 gap-y-2 sm:gap-x-2">
                     {user?.role !== "seller" ? (
-                        <Link href="/products" className={navLinkClass(pathname.startsWith("/products"))}>
+                        <Link
+                            href="/products"
+                            className={navLinkClass(pathname.startsWith("/products"))}
+                        >
                             Products
                         </Link>
                     ) : null}
@@ -189,7 +194,10 @@ export function SiteHeader() {
                     ) : null}
                     {!user ? (
                         <>
-                            <Link href="/auth/login" className={navLinkClass(pathname === "/auth/login")}>
+                            <Link
+                                href="/auth/login"
+                                className={navLinkClass(pathname === "/auth/login")}
+                            >
                                 Login
                             </Link>
                             <Link

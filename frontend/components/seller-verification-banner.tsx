@@ -15,7 +15,7 @@ import {
 } from "@/lib/api/endpoints";
 import { toSellerVerificationUiPhase, type SellerVerificationUiPhase } from "@/types";
 
-async function uploadPermitAndGetUrl(file: File): Promise<string> {
+async function uploadPermitFile(file: File) {
     const target = await createVerificationUploadUrl(file.name);
     try {
         const putRes = await fetch(target.uploadUrl, {
@@ -29,7 +29,7 @@ async function uploadPermitAndGetUrl(file: File): Promise<string> {
     } catch {
         console.warn("Permit upload PUT failed; continuing with signed URL for submit.");
     }
-    return target.uploadUrl;
+    return target;
 }
 
 export function SellerVerificationBanner() {
@@ -69,12 +69,20 @@ export function SellerVerificationBanner() {
         }
         setSubmitting(true);
         try {
-            const permitFileUrl = await uploadPermitAndGetUrl(file);
+            const target = await uploadPermitFile(file);
             if (isResubmit) {
-                await resubmitSellerVerification(permitFileUrl, note.trim() || undefined);
+                await resubmitSellerVerification(
+                    target.uploadUrl,
+                    note.trim() || undefined,
+                    target.path
+                );
                 toast.success("New document submitted for review.");
             } else {
-                await submitSellerVerification(permitFileUrl, note.trim() || undefined);
+                await submitSellerVerification(
+                    target.uploadUrl,
+                    note.trim() || undefined,
+                    target.path
+                );
                 toast.success("Verification submitted.");
             }
             setFile(null);

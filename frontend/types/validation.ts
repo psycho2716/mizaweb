@@ -14,7 +14,15 @@ export const sellerRegisterSchema = loginSchema.extend({
     fullName: z.string().min(2, "Full name is required"),
     businessName: z.string().min(2, "Business name is required"),
     contactNumber: z.string().min(7, "Contact number is required"),
-    address: z.string().min(3, "Business address is required")
+    address: z.string().min(3, "Business address is required"),
+    shopLatitude: z
+        .number({ error: "Drop a pin on the map for your shop" })
+        .min(-90)
+        .max(90),
+    shopLongitude: z
+        .number({ error: "Drop a pin on the map for your shop" })
+        .min(-180)
+        .max(180)
 });
 
 export const registerSchema = z.union([buyerRegisterSchema, sellerRegisterSchema]);

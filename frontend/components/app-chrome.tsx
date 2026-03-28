@@ -7,8 +7,9 @@ import { SiteHeader } from "@/components/site-header";
 export function AppChrome({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const isAuthRoute = pathname.startsWith("/auth");
+    const isAdminRoute = pathname.startsWith("/admin");
 
-    if (isAuthRoute) {
+    if (isAuthRoute || isAdminRoute) {
         return <>{children}</>;
     }
 

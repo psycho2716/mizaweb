@@ -8,3 +8,8 @@ export function cn(...inputs: ClassValue[]) {
 export function getAppName(): string {
     return process.env.NEXT_PUBLIC_APP_NAME ?? "Mizaweb";
 }
+
+/** Browser key for Maps JavaScript API (Places / map embeds). */
+export function getGoogleMapsBrowserApiKey(): string {
+    return process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() ?? "";
+}

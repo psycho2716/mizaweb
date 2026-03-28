@@ -1,5 +1,7 @@
 import { apiFetch } from "@/lib/api/client";
 import type {
+    AdminOverviewData,
+    AdminUserDetailData,
     AuthLoginResponse,
     CartResponse,
     CheckoutResponse,
@@ -13,6 +15,7 @@ import type {
     SellerPaymentMethodsResponse,
     SellerPublicProfile,
     SellerProfileResponse,
+    AdminUsersListResponse,
     VerificationQueueResponse,
     VerificationStatusResponse,
     VerificationSubmitResponse,
@@ -35,6 +38,8 @@ export function registerAccount(
         businessName?: string;
         contactNumber?: string;
         address?: string;
+        shopLatitude?: number;
+        shopLongitude?: number;
     }
 ) {
     return apiFetch<AuthLoginResponse>("/auth/register", {
@@ -47,22 +52,32 @@ export function getSellerVerificationStatus() {
     return apiFetch<VerificationStatusResponse>("/seller/verification/status");
 }
 
-export function submitSellerVerification(permitFileUrl: string, note?: string) {
+export function submitSellerVerification(
+    permitFileUrl: string,
+    note?: string,
+    permitObjectPath?: string
+) {
     return apiFetch<VerificationSubmitResponse>("/seller/verification/submit", {
         method: "POST",
         body: JSON.stringify({
             permitFileUrl,
-            ...(note ? { note } : {})
+            ...(note ? { note } : {}),
+            ...(permitObjectPath ? { permitObjectPath } : {})
         })
     });
 }
 
-export function resubmitSellerVerification(permitFileUrl: string, note?: string) {
+export function resubmitSellerVerification(
+    permitFileUrl: string,
+    note?: string,
+    permitObjectPath?: string
+) {
     return apiFetch<VerificationSubmitResponse>("/seller/verification/resubmit", {
         method: "POST",
         body: JSON.stringify({
             permitFileUrl,
-            ...(note ? { note } : {})
+            ...(note ? { note } : {}),
+            ...(permitObjectPath ? { permitObjectPath } : {})
         })
     });
 }
@@ -84,8 +99,53 @@ export function createSellerAssetUploadUrl(
     });
 }
 
-export function listPendingVerifications() {
-    return apiFetch<VerificationQueueResponse>("/admin/verifications?status=pending");
+export function getAdminOverview() {
+    return apiFetch<{ data: AdminOverviewData }>("/admin/overview");
+}
+
+export function listAdminUsers(params?: { page?: number; limit?: number }) {
+    const search = new URLSearchParams();
+    if (params?.page !== undefined) search.set("page", String(params.page));
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return apiFetch<AdminUsersListResponse>(`/admin/users${qs ? `?${qs}` : ""}`);
+}
+
+export function getAdminUserDetail(userId: string) {
+    return apiFetch<{ data: AdminUserDetailData }>(`/admin/users/${userId}`);
+}
+
+export function suspendAdminUser(userId: string) {
+    return apiFetch<{ ok: boolean }>(`/admin/users/${userId}/suspend`, {
+        method: "POST",
+        body: JSON.stringify({})
+    });
+}
+
+export function unsuspendAdminUser(userId: string) {
+    return apiFetch<{ ok: boolean }>(`/admin/users/${userId}/unsuspend`, {
+        method: "POST",
+        body: JSON.stringify({})
+    });
+}
+
+export function deleteAdminUser(userId: string) {
+    return apiFetch<{ ok: boolean }>(`/admin/users/${userId}`, {
+        method: "DELETE",
+        body: JSON.stringify({})
+    });
+}
+
+export function listPendingVerifications(params?: { page?: number; limit?: number }) {
+    const search = new URLSearchParams();
+    search.set("status", "pending");
+    if (params?.page !== undefined) search.set("page", String(params.page));
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    return apiFetch<VerificationQueueResponse>(`/admin/verifications?${search.toString()}`);
+}
+
+export function getAdminVerificationPermitUrl(verificationId: string) {
+    return apiFetch<{ url: string }>(`/admin/verifications/${verificationId}/permit-url`);
 }
 
 export function approveVerification(verificationId: string) {

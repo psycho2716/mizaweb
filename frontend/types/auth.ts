@@ -5,6 +5,7 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   fullName?: string;
+  suspended?: boolean;
 }
 
 export interface LoginCredentials {

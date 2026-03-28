@@ -7,6 +7,8 @@ export interface AuthUser {
     email: string;
     role: UserRole;
     fullName?: string;
+    /** Account cannot sign in or use the API (admin suspend / auth ban). */
+    suspended?: boolean;
 }
 
 export interface SellerProfile {
@@ -14,6 +16,10 @@ export interface SellerProfile {
     businessName: string;
     contactNumber: string;
     address: string;
+    /** WGS84 latitude from map pin (optional for legacy rows). */
+    shopLatitude?: number;
+    /** WGS84 longitude from map pin (optional for legacy rows). */
+    shopLongitude?: number;
     profileImageUrl?: string;
     storeBackgroundUrl?: string;
 }
@@ -41,6 +47,8 @@ export interface VerificationSubmission {
     id: string;
     sellerId: string;
     permitFileUrl: string;
+    /** Storage object key inside the verification bucket (preferred for admin signed download). */
+    permitObjectPath?: string;
     note?: string;
     status: "pending" | "approved" | "rejected";
     rejectionReason?: string;

@@ -1,10 +1,11 @@
 "use client";
 
 import { Store } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -18,6 +19,15 @@ import {
     submitSellerVerification
 } from "@/lib/api/endpoints";
 import { buyerRegisterSchema, sellerRegisterSchema } from "@/types";
+
+const SellerShopMapPicker = dynamic(() => import("@/components/auth/seller-shop-map-picker"), {
+    ssr: false,
+    loading: () => (
+        <div className="flex h-64 items-center justify-center rounded-md border border-(--border) text-xs text-(--muted) md:col-span-2">
+            Loading map…
+        </div>
+    )
+});
 
 type BuyerRegisterFormValues = z.infer<typeof buyerRegisterSchema>;
 type SellerRegisterFormValues = z.infer<typeof sellerRegisterSchema>;
@@ -42,6 +52,8 @@ export default function RegisterPage() {
     const {
         register: registerSeller,
         handleSubmit: handleSellerSubmit,
+        control: sellerControl,
+        setValue,
         formState: { isSubmitting: isSellerSubmitting, errors: sellerErrors }
     } = useForm<SellerRegisterFormValues>({
         resolver: zodResolver(sellerRegisterSchema),
@@ -52,9 +64,14 @@ export default function RegisterPage() {
             fullName: "",
             businessName: "",
             contactNumber: "",
-            address: ""
+            address: "",
+            shopLatitude: undefined as unknown as number,
+            shopLongitude: undefined as unknown as number
         }
     });
+
+    const shopLat = useWatch({ control: sellerControl, name: "shopLatitude" });
+    const shopLng = useWatch({ control: sellerControl, name: "shopLongitude" });
 
     async function completeRegistration(
         values: BuyerRegisterFormValues | SellerRegisterFormValues
@@ -66,7 +83,9 @@ export default function RegisterPage() {
                           fullName: values.fullName,
                           businessName: values.businessName,
                           contactNumber: values.contactNumber,
-                          address: values.address
+                          address: values.address,
+                          shopLatitude: values.shopLatitude,
+                          shopLongitude: values.shopLongitude
                       }
                     : {})
             });
@@ -112,7 +131,9 @@ export default function RegisterPage() {
                 businessName: values.businessName,
                 contactNumber: values.contactNumber,
                 address: values.address,
-                fullName: values.fullName
+                fullName: values.fullName,
+                shopLatitude: values.shopLatitude,
+                shopLongitude: values.shopLongitude
             });
 
             localStorage.setItem("miza_token", result.token);
@@ -135,7 +156,7 @@ export default function RegisterPage() {
                     "Permit upload PUT returned non-OK; continuing with signed URL for submit."
                 );
             }
-            await submitSellerVerification(target.uploadUrl);
+            await submitSellerVerification(target.uploadUrl, undefined, target.path);
             toast.success("Seller account created and verification submitted.");
             router.push("/seller/dashboard");
         } catch (error) {
@@ -144,14 +165,14 @@ export default function RegisterPage() {
     }
 
     return (
-        <main className="relative min-h-screen bg-[#070b11]">
+        <main className="relative min-h-screen flex justify-center items-center bg-[#070b11]">
             <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_54%_18%,rgba(34,199,243,0.08),transparent_36%),linear-gradient(90deg,rgba(7,11,17,0)_44%,rgba(7,11,17,0.34)_52%,rgba(7,11,17,0)_60%)]" />
             <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_18%_20%,rgba(34,199,243,0.14),transparent_34%),linear-gradient(140deg,#0a0f16_0%,#0a0d13_48%,#07090f_100%)]" />
             <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(120deg,rgba(6,10,16,0.2)_10%,rgba(5,8,13,0.58)_55%,rgba(4,6,11,0.84)_100%)]" />
 
-            <div className="relative z-10 grid min-h-screen w-full md:grid-cols-2">
+            <div className="relative z-10 grid min-h-screen w-full md:grid-cols-2 lg:max-w-[75%] mx-auto">
                 <section className="relative hidden min-h-screen overflow-hidden md:block">
-                    <div className="relative flex h-full flex-col justify-between p-10">
+                    <div className="relative flex justify-between h-full flex-col gap-42 p-10">
                         <div>
                             <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-(--accent)">
                                 Access the marketplace
@@ -170,8 +191,8 @@ export default function RegisterPage() {
                     </div>
                 </section>
 
-                <section className="relative flex min-h-screen items-center justify-center overflow-hidden px-5 py-6 md:px-8 lg:px-10">
-                    <div className="relative flex w-full max-w-[680px] flex-col border border-(--border) bg-[#0c1119]/95 p-7 md:p-10">
+                <section className="relative flex min-h-screen items-center justify-center px-5 py-6 md:px-8 lg:px-10">
+                    <div className="relative flex w-full max-w-[480px] h-full flex-col border border-(--border) bg-[#0c1119]/95 p-7 md:p-10">
                         <p className="text-xs uppercase tracking-[0.16em] text-(--muted)">
                             Create account
                         </p>
@@ -203,7 +224,7 @@ export default function RegisterPage() {
                                     className="space-y-4"
                                     onSubmit={handleBuyerSubmit(handleBuyerRegister)}
                                 >
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="buyer-email"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -223,7 +244,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="buyer-password"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -243,15 +264,17 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <Button
-                                        type="submit"
-                                        disabled={isBuyerSubmitting}
-                                        className="mt-2 h-12 rounded-sm bg-(--accent) px-8 text-sm font-semibold uppercase tracking-[0.14em] text-[#031018] hover:brightness-110"
-                                    >
-                                        {isBuyerSubmitting
-                                            ? "Creating account..."
-                                            : "Register buyer"}
-                                    </Button>
+                                    <div className="col-span-2 flex items-center justify-center pt-2">
+                                        <Button
+                                            type="submit"
+                                            disabled={isBuyerSubmitting}
+                                            className="mt-2 h-12 rounded-sm bg-(--accent) px-8 text-sm font-semibold uppercase tracking-[0.14em] text-[#031018] hover:brightness-110"
+                                        >
+                                            {isBuyerSubmitting
+                                                ? "Creating account..."
+                                                : "Register buyer"}
+                                        </Button>
+                                    </div>
                                 </form>
                             </TabsContent>
 
@@ -263,7 +286,7 @@ export default function RegisterPage() {
                                     className="grid gap-4 md:grid-cols-2"
                                     onSubmit={handleSellerSubmit(handleSellerRegister)}
                                 >
-                                    <div className="space-y-2 md:col-span-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-email"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -274,7 +297,7 @@ export default function RegisterPage() {
                                             id="seller-email"
                                             type="email"
                                             placeholder="store@company.com"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("email")}
                                         />
                                         {sellerErrors.email ? (
@@ -283,7 +306,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2 md:col-span-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-password"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -294,7 +317,7 @@ export default function RegisterPage() {
                                             id="seller-password"
                                             type="password"
                                             placeholder="At least 8 characters"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("password")}
                                         />
                                         {sellerErrors.password ? (
@@ -303,7 +326,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-full-name"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -313,7 +336,7 @@ export default function RegisterPage() {
                                         <Input
                                             id="seller-full-name"
                                             placeholder="Juan Dela Cruz"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("fullName")}
                                         />
                                         {sellerErrors.fullName ? (
@@ -322,7 +345,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-business-name"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -332,7 +355,7 @@ export default function RegisterPage() {
                                         <Input
                                             id="seller-business-name"
                                             placeholder="Miza Stone Studio"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("businessName")}
                                         />
                                         {sellerErrors.businessName ? (
@@ -341,7 +364,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-contact-number"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -351,7 +374,7 @@ export default function RegisterPage() {
                                         <Input
                                             id="seller-contact-number"
                                             placeholder="+639000000001"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("contactNumber")}
                                         />
                                         {sellerErrors.contactNumber ? (
@@ -360,7 +383,7 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2">
+                                    <div className="space-y-2 col-span-2 lg:col-span-1">
                                         <Label
                                             htmlFor="seller-address"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -370,7 +393,7 @@ export default function RegisterPage() {
                                         <Input
                                             id="seller-address"
                                             placeholder="Romblon, Philippines"
-                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-0 text-foreground focus-visible:ring-0"
+                                            className="h-11 rounded-none border-x-0 border-t-0 border-b-(--border) bg-transparent px-2 text-foreground focus-visible:ring-0"
                                             {...registerSeller("address")}
                                         />
                                         {sellerErrors.address ? (
@@ -379,7 +402,31 @@ export default function RegisterPage() {
                                             </p>
                                         ) : null}
                                     </div>
-                                    <div className="space-y-2 md:col-span-2">
+                                    <div className="col-span-2">
+                                        <SellerShopMapPicker
+                                            latitude={
+                                                Number.isFinite(shopLat) ? shopLat : undefined
+                                            }
+                                            longitude={
+                                                Number.isFinite(shopLng) ? shopLng : undefined
+                                            }
+                                            onPositionChange={(lat, lng) => {
+                                                setValue("shopLatitude", lat, {
+                                                    shouldValidate: true,
+                                                    shouldDirty: true
+                                                });
+                                                setValue("shopLongitude", lng, {
+                                                    shouldValidate: true,
+                                                    shouldDirty: true
+                                                });
+                                            }}
+                                            error={
+                                                sellerErrors.shopLatitude?.message ??
+                                                sellerErrors.shopLongitude?.message
+                                            }
+                                        />
+                                    </div>
+                                    <div className="space-y-2 col-span-2">
                                         <Label
                                             htmlFor="seller-permit-file"
                                             className="text-xs uppercase tracking-[0.14em] text-(--muted)"
@@ -423,9 +470,9 @@ export default function RegisterPage() {
                             </Link>
                         </p>
                     </div>
-                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_84%_16%,rgba(34,199,243,0.09),transparent_36%)]" />
                 </section>
             </div>
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_84%_16%,rgba(34,199,243,0.09),transparent_36%)]" />
         </main>
     );
 }

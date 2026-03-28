@@ -42,7 +42,7 @@ async function main(): Promise<void> {
         email_confirm: true,
         user_metadata: {
             role: "admin",
-            full_name: "Platform Admin"
+            full_name: "Administrator"
         }
     });
 

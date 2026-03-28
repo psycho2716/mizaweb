@@ -25,6 +25,9 @@ import {
     deleteProductMedia,
     deleteProductMediaByProduct,
     deleteSellerPaymentMethod,
+    deleteSellerProfileBySellerId,
+    deleteSellerStatusBySellerId,
+    deleteVerificationById,
     persistCartItem,
     persistCustomizationOption,
     persistCustomizationRule,
@@ -40,9 +43,77 @@ import {
 } from "./integrations/supabase/persistence";
 import { hashPassword, verifyPassword } from "./lib/password";
 import { emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
-import { generateVerificationUploadTarget } from "./modules/verification/verification-storage";
+import {
+    createSignedVerificationDownloadUrl,
+    extractVerificationObjectPath,
+    generateVerificationUploadTarget
+} from "./modules/verification/verification-storage";
+import type { AuthUser } from "./types/domain";
 
 const app = express();
+
+async function adminDeleteUserAccount(
+    targetId: string,
+    actorId: string
+): Promise<{ ok: true } | { error: string; status: number }> {
+    if (targetId === actorId) {
+        return { error: "Cannot delete your own account", status: 400 };
+    }
+    const target = db.users.get(targetId);
+    if (!target) {
+        return { error: "Not found", status: 404 };
+    }
+    if (target.role === "admin") {
+        const admins = [...db.users.values()].filter((u) => u.role === "admin");
+        if (admins.length < 2) {
+            return { error: "Cannot remove the last administrator", status: 400 };
+        }
+    }
+    if (isSupabaseAuthReady()) {
+        const supabaseAdmin = createSupabaseAdminClient();
+        if (!supabaseAdmin) {
+            return { error: "Authentication service unavailable", status: 503 };
+        }
+        const { error } = await supabaseAdmin.auth.admin.deleteUser(targetId);
+        if (error) {
+            return { error: error.message, status: 500 };
+        }
+    } else {
+        for (const [email, cred] of [...db.credentials.entries()]) {
+            if (cred.userId === targetId) {
+                db.credentials.delete(email);
+            }
+        }
+    }
+    if (target.role === "seller") {
+        for (const v of [...db.verifications.values()]) {
+            if (v.sellerId === targetId) {
+                db.verifications.delete(v.id);
+                deleteVerificationById(v.id);
+            }
+        }
+        for (const m of [...db.sellerPaymentMethods.values()]) {
+            if (m.sellerId === targetId) {
+                db.sellerPaymentMethods.delete(m.id);
+                deleteSellerPaymentMethod(m.id);
+            }
+        }
+        db.sellerProfiles.delete(targetId);
+        deleteSellerProfileBySellerId(targetId);
+        db.sellerStatus.delete(targetId);
+        deleteSellerStatusBySellerId(targetId);
+    }
+    if (target.role === "buyer") {
+        for (const item of [...db.cartItems.values()]) {
+            if (item.buyerId === targetId) {
+                db.cartItems.delete(item.id);
+                deleteCartItem(item.id);
+            }
+        }
+    }
+    db.users.delete(targetId);
+    return { ok: true };
+}
 
 app.use(helmet());
 app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
@@ -71,6 +142,38 @@ function getGuestSessionId(request: express.Request): string | null {
     return sessionId && sessionId.trim().length > 0 ? sessionId.trim() : null;
 }
 
+function parseListPagination(query: express.Request["query"]): { page: number; limit: number } {
+    const rawPage = typeof query.page === "string" ? Number.parseInt(query.page, 10) : Number.NaN;
+    const rawLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : Number.NaN;
+    const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
+    const limitRaw = Number.isFinite(rawLimit) && rawLimit >= 1 ? Math.floor(rawLimit) : 10;
+    const limit = Math.min(100, Math.max(1, limitRaw));
+    return { page, limit };
+}
+
+function slicePaginated<T>(
+    items: T[],
+    requestedPage: number,
+    limit: number
+): {
+    data: T[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+} {
+    const total = items.length;
+    const totalPages = total === 0 ? 1 : Math.ceil(total / limit);
+    const safePage = Math.min(Math.max(1, requestedPage), totalPages);
+    const offset = (safePage - 1) * limit;
+    return {
+        data: items.slice(offset, offset + limit),
+        pagination: {
+            page: safePage,
+            limit,
+            total,
+            totalPages
+        }
+    };
+}
+
 app.get("/health", (_request, response) => {
     response.json({
         ok: true,
@@ -89,7 +192,9 @@ app.post("/auth/register", authLimiter, async (request, response) => {
             fullName: z.string().min(2).max(120).optional(),
             businessName: z.string().min(2).max(120).optional(),
             contactNumber: z.string().min(7).max(40).optional(),
-            address: z.string().min(3).max(255).optional()
+            address: z.string().min(3).max(255).optional(),
+            shopLatitude: z.number().gte(-90).lte(90).optional(),
+            shopLongitude: z.number().gte(-180).lte(180).optional()
         })
         .superRefine((values, context) => {
             if (values.role === "seller") {
@@ -119,6 +224,13 @@ app.post("/auth/register", authLimiter, async (request, response) => {
                         code: z.ZodIssueCode.custom,
                         message: "Business address is required for seller registration",
                         path: ["address"]
+                    });
+                }
+                if (values.shopLatitude === undefined || values.shopLongitude === undefined) {
+                    context.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: "Pin your shop location on the map",
+                        path: ["shopLatitude"]
                     });
                 }
             }
@@ -182,7 +294,9 @@ app.post("/auth/register", authLimiter, async (request, response) => {
                 sellerId: id,
                 businessName: parsed.data.businessName as string,
                 contactNumber: parsed.data.contactNumber as string,
-                address: parsed.data.address as string
+                address: parsed.data.address as string,
+                shopLatitude: parsed.data.shopLatitude as number,
+                shopLongitude: parsed.data.shopLongitude as number
             });
         }
 
@@ -245,7 +359,9 @@ app.post("/auth/register", authLimiter, async (request, response) => {
             sellerId: id,
             businessName: parsed.data.businessName as string,
             contactNumber: parsed.data.contactNumber as string,
-            address: parsed.data.address as string
+            address: parsed.data.address as string,
+            shopLatitude: parsed.data.shopLatitude as number,
+            shopLongitude: parsed.data.shopLongitude as number
         });
     }
 
@@ -313,6 +429,19 @@ app.post("/auth/login", authLimiter, async (request, response) => {
             });
             return;
         }
+        const bannedUntil = (data.user as { banned_until?: string | null }).banned_until;
+        if (
+            bannedUntil &&
+            Number.isFinite(new Date(bannedUntil).getTime()) &&
+            new Date(bannedUntil).getTime() > Date.now()
+        ) {
+            response.status(403).json({ error: "Account suspended" });
+            return;
+        }
+        if (user.suspended) {
+            response.status(403).json({ error: "Account suspended" });
+            return;
+        }
         response.json({
             token: data.session.access_token,
             refreshToken: data.session.refresh_token,
@@ -330,6 +459,10 @@ app.post("/auth/login", authLimiter, async (request, response) => {
     const user = db.users.get(credentials.userId);
     if (!user) {
         response.status(404).json({ error: "User not found" });
+        return;
+    }
+    if (user.suspended) {
+        response.status(403).json({ error: "Account suspended" });
         return;
     }
 
@@ -399,6 +532,8 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         businessName: z.string().min(2).max(120).optional(),
         contactNumber: z.string().min(7).max(40).optional(),
         address: z.string().min(3).max(255).optional(),
+        shopLatitude: z.number().gte(-90).lte(90).optional(),
+        shopLongitude: z.number().gte(-180).lte(180).optional(),
         profileImageUrl: z.string().url().optional(),
         storeBackgroundUrl: z.string().url().optional()
     });
@@ -418,6 +553,8 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         businessName: profile.businessName,
         contactNumber: profile.contactNumber,
         address: profile.address,
+        shopLatitude: profile.shopLatitude,
+        shopLongitude: profile.shopLongitude,
         profileImageUrl: profile.profileImageUrl,
         storeBackgroundUrl: profile.storeBackgroundUrl
     };
@@ -425,6 +562,12 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
     profile.businessName = parsed.data.businessName ?? profile.businessName;
     profile.contactNumber = parsed.data.contactNumber ?? profile.contactNumber;
     profile.address = parsed.data.address ?? profile.address;
+    if (parsed.data.shopLatitude !== undefined) {
+        profile.shopLatitude = parsed.data.shopLatitude;
+    }
+    if (parsed.data.shopLongitude !== undefined) {
+        profile.shopLongitude = parsed.data.shopLongitude;
+    }
     if (parsed.data.profileImageUrl) {
         profile.profileImageUrl = parsed.data.profileImageUrl;
     }
@@ -466,6 +609,16 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         profile.businessName = previous.businessName;
         profile.contactNumber = previous.contactNumber;
         profile.address = previous.address;
+        if (previous.shopLatitude !== undefined) {
+            profile.shopLatitude = previous.shopLatitude;
+        } else {
+            delete profile.shopLatitude;
+        }
+        if (previous.shopLongitude !== undefined) {
+            profile.shopLongitude = previous.shopLongitude;
+        } else {
+            delete profile.shopLongitude;
+        }
         if (previous.profileImageUrl !== undefined) {
             profile.profileImageUrl = previous.profileImageUrl;
         } else {
@@ -734,7 +887,13 @@ app.post(
     async (request, response) => {
         const schema = z.object({
             permitFileUrl: z.string().url(),
-            note: z.string().max(1000).optional()
+            note: z.string().max(1000).optional(),
+            permitObjectPath: z
+                .string()
+                .min(3)
+                .max(512)
+                .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid storage path")
+                .optional()
         });
         const parsed = schema.safeParse(request.body);
         if (!parsed.success) {
@@ -748,6 +907,9 @@ app.post(
             sellerId: request.authUserId as string,
             permitFileUrl: parsed.data.permitFileUrl,
             status: "pending" as const,
+            ...(parsed.data.permitObjectPath
+                ? { permitObjectPath: parsed.data.permitObjectPath }
+                : {}),
             ...(parsed.data.note ? { note: parsed.data.note } : {})
         };
         try {
@@ -793,7 +955,13 @@ app.post(
     async (request, response) => {
         const schema = z.object({
             permitFileUrl: z.string().url(),
-            note: z.string().max(1000).optional()
+            note: z.string().max(1000).optional(),
+            permitObjectPath: z
+                .string()
+                .min(3)
+                .max(512)
+                .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid storage path")
+                .optional()
         });
         const parsed = schema.safeParse(request.body);
         if (!parsed.success) {
@@ -807,6 +975,9 @@ app.post(
             sellerId: request.authUserId as string,
             permitFileUrl: parsed.data.permitFileUrl,
             status: "pending" as const,
+            ...(parsed.data.permitObjectPath
+                ? { permitObjectPath: parsed.data.permitObjectPath }
+                : {}),
             ...(parsed.data.note ? { note: parsed.data.note } : {})
         };
         try {
@@ -827,10 +998,10 @@ app.post(
 
 app.get("/admin/verifications", authenticate, authorizeRole(["admin"]), (request, response) => {
     const status = request.query.status;
+    const { page, limit } = parseListPagination(request.query);
     const rows = [...db.verifications.values()]
-        .filter((entry) =>
-        typeof status === "string" ? entry.status === status : true
-        )
+        .filter((entry) => (typeof status === "string" ? entry.status === status : true))
+        .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
         .map((entry) => {
             const seller = db.users.get(entry.sellerId);
             const profile = db.sellerProfiles.get(entry.sellerId);
@@ -850,7 +1021,8 @@ app.get("/admin/verifications", authenticate, authorizeRole(["admin"]), (request
                 paymentMethods
             };
         });
-    response.json({ data: rows });
+    const { data, pagination } = slicePaginated(rows, page, limit);
+    response.json({ data, pagination });
 });
 
 app.get("/admin/verifications/:id", authenticate, authorizeRole(["admin"]), (request, response) => {
@@ -880,6 +1052,39 @@ app.get("/admin/verifications/:id", authenticate, authorizeRole(["admin"]), (req
         }
     });
 });
+
+app.get(
+    "/admin/verifications/:id/permit-url",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const verification = db.verifications.get(id);
+        if (!verification) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        const trimmedPath = verification.permitObjectPath?.trim();
+        const objectPath =
+            trimmedPath && trimmedPath.length > 0
+                ? trimmedPath
+                : extractVerificationObjectPath(verification.permitFileUrl);
+        if (!objectPath) {
+            response.status(400).json({
+                error: "Could not resolve permit file path from stored URL"
+            });
+            return;
+        }
+        const url = await createSignedVerificationDownloadUrl(objectPath, 3600);
+        if (!url) {
+            response.status(503).json({
+                error: "Storage is not configured or signed URL could not be created"
+            });
+            return;
+        }
+        response.json({ url });
+    }
+);
 
 app.post(
     "/admin/verifications/:id/approve",
@@ -1689,8 +1894,149 @@ app.post(
     }
 );
 
-app.get("/admin/users", authenticate, authorizeRole(["admin"]), (_request, response) => {
-    response.json({ data: [...db.users.values()] });
+app.get("/admin/overview", authenticate, authorizeRole(["admin"]), (_request, response) => {
+    const sellers = [...db.users.values()].filter((u) => u.role === "seller");
+    let verifiedSellers = 0;
+    for (const s of sellers) {
+        if (db.sellerStatus.get(s.id) === "approved") {
+            verifiedSellers += 1;
+        }
+    }
+    const pendingVerifications = [...db.verifications.values()].filter((v) => v.status === "pending")
+        .length;
+    response.json({
+        data: {
+            pendingVerifications,
+            verifiedSellers,
+            unverifiedSellers: sellers.length - verifiedSellers,
+            totalSellers: sellers.length
+        }
+    });
+});
+
+app.get("/admin/users", authenticate, authorizeRole(["admin"]), (request, response) => {
+    const { page, limit } = parseListPagination(request.query);
+    const rows = [...db.users.values()]
+        .sort((a, b) => a.email.toLowerCase().localeCompare(b.email.toLowerCase()))
+        .map((u) => ({
+            id: u.id,
+            email: u.email,
+            role: u.role,
+            fullName: u.fullName,
+            suspended: Boolean(u.suspended),
+            ...(u.role === "seller"
+                ? { verificationStatus: db.sellerStatus.get(u.id) ?? "unsubmitted" }
+                : {})
+        }));
+    const { data, pagination } = slicePaginated(rows, page, limit);
+    response.json({ data, pagination });
+});
+
+app.get("/admin/users/:id", authenticate, authorizeRole(["admin"]), (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const user = db.users.get(id);
+    if (!user) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    const profile = user.role === "seller" ? db.sellerProfiles.get(id) ?? null : null;
+    const paymentMethods =
+        user.role === "seller"
+            ? [...db.sellerPaymentMethods.values()].filter((m) => m.sellerId === id)
+            : [];
+    const verificationStatus =
+        user.role === "seller" ? db.sellerStatus.get(id) ?? "unsubmitted" : undefined;
+    const verifications =
+        user.role === "seller"
+            ? [...db.verifications.values()]
+                  .filter((v) => v.sellerId === id)
+                  .sort((a, b) => (a.id < b.id ? 1 : -1))
+            : [];
+    response.json({
+        data: {
+            user,
+            profile,
+            paymentMethods,
+            verificationStatus,
+            verifications
+        }
+    });
+});
+
+app.post("/admin/users/:id/suspend", authenticate, authorizeRole(["admin"]), async (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const actorId = request.authUserId as string;
+    if (id === actorId) {
+        response.status(400).json({ error: "Cannot suspend your own account" });
+        return;
+    }
+    const user = db.users.get(id);
+    if (!user) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    if (user.suspended) {
+        response.json({ ok: true });
+        return;
+    }
+    if (isSupabaseAuthReady()) {
+        const supabaseAdmin = createSupabaseAdminClient();
+        if (!supabaseAdmin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
+            ban_duration: "876000h"
+        });
+        if (error) {
+            response.status(500).json({ error: error.message });
+            return;
+        }
+    }
+    const next: AuthUser = { ...user, suspended: true };
+    db.users.set(id, next);
+    response.json({ ok: true });
+});
+
+app.post("/admin/users/:id/unsuspend", authenticate, authorizeRole(["admin"]), async (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const user = db.users.get(id);
+    if (!user) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    if (isSupabaseAuthReady()) {
+        const supabaseAdmin = createSupabaseAdminClient();
+        if (!supabaseAdmin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
+            ban_duration: "none"
+        });
+        if (error) {
+            response.status(500).json({ error: error.message });
+            return;
+        }
+    }
+    const next: AuthUser = {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        ...(user.fullName ? { fullName: user.fullName } : {})
+    };
+    db.users.set(id, next);
+    response.json({ ok: true });
+});
+
+app.delete("/admin/users/:id", authenticate, authorizeRole(["admin"]), async (request, response) => {
+    const id = z.string().min(1).parse(request.params.id);
+    const result = await adminDeleteUserAccount(id, request.authUserId as string);
+    if (!("ok" in result)) {
+        response.status(result.status).json({ error: result.error });
+        return;
+    }
+    response.json({ ok: true });
 });
 
 app.post("/maps/geocode", authenticate, (_request, response) => {

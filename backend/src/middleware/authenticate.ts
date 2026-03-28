@@ -28,6 +28,11 @@ export async function authenticate(
         if (env.NODE_ENV === "test") {
             const authUserId = request.header("x-user-id");
             if (authUserId && db.users.has(authUserId)) {
+                const u = db.users.get(authUserId);
+                if (u?.suspended) {
+                    response.status(403).json({ error: "Account suspended" });
+                    return;
+                }
                 request.authUserId = authUserId;
                 next();
                 return;
@@ -56,14 +61,18 @@ export async function authenticate(
                 return;
             }
             const uid = authUser.id;
+            applyAuthUserToRuntime(authUser);
             if (!db.users.has(uid)) {
                 await syncFromSupabaseIfStale();
             }
-            if (!db.users.has(uid)) {
-                applyAuthUserToRuntime(authUser);
-            }
+            applyAuthUserToRuntime(authUser);
             if (!db.users.has(uid)) {
                 response.status(401).json({ error: "User profile not found" });
+                return;
+            }
+            const runtimeUser = db.users.get(uid);
+            if (runtimeUser?.suspended) {
+                response.status(403).json({ error: "Account suspended" });
                 return;
             }
             request.authUserId = uid;
@@ -74,6 +83,11 @@ export async function authenticate(
         try {
             const payload = jwt.verify(token, env.JWT_SECRET) as { sub?: string };
             if (payload.sub && db.users.has(payload.sub)) {
+                const runtimeUser = db.users.get(payload.sub);
+                if (runtimeUser?.suspended) {
+                    response.status(403).json({ error: "Account suspended" });
+                    return;
+                }
                 request.authUserId = payload.sub;
                 next();
                 return;
@@ -112,18 +126,26 @@ export async function resolveOptionalAuthUserId(request: Request): Promise<strin
             if (error || !authUser) {
                 return null;
             }
+            applyAuthUserToRuntime(authUser);
             if (!db.users.has(authUser.id)) {
                 await syncFromSupabaseIfStale();
             }
+            applyAuthUserToRuntime(authUser);
             if (!db.users.has(authUser.id)) {
-                applyAuthUserToRuntime(authUser);
+                return null;
             }
-            return db.users.has(authUser.id) ? authUser.id : null;
+            if (db.users.get(authUser.id)?.suspended) {
+                return null;
+            }
+            return authUser.id;
         }
 
         try {
             const payload = jwt.verify(token, env.JWT_SECRET) as { sub?: string };
             if (payload.sub && db.users.has(payload.sub)) {
+                if (db.users.get(payload.sub)?.suspended) {
+                    return null;
+                }
                 return payload.sub;
             }
         } catch {
