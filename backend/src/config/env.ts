@@ -11,6 +11,8 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().min(1).optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
   SUPABASE_VERIFICATION_BUCKET: z.string().min(1).default("verification-docs"),
+  /** Product listing images, video, GLB (must allow video + model MIME types; not verification-docs). */
+  SUPABASE_PRODUCT_MEDIA_BUCKET: z.string().min(1).default("product-media"),
   JWT_SECRET: z.string().min(16).default("replace-with-a-secure-secret"),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
   GOOGLE_DIRECTIONS_API_KEY: z.string().optional(),

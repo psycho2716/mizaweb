@@ -7,8 +7,36 @@ import {
 export interface VerificationUploadTarget {
   path: string;
   uploadUrl: string;
+  /** Stable URL to persist after PUT (public bucket); omit when using private verification-docs. */
+  publicUrl?: string;
   expiresIn: number;
   provider: "supabase" | "mock";
+}
+
+function isProductMediaKind(
+  kind:
+    | "verification"
+    | "profile"
+    | "background"
+    | "payment-qr"
+    | "product-image"
+    | "product-video"
+    | "product-3d-model",
+): boolean {
+  return (
+    kind === "product-image" ||
+    kind === "product-video" ||
+    kind === "product-3d-model"
+  );
+}
+
+function storagePublicObjectUrl(bucket: string, objectPath: string): string | undefined {
+  const base = env.SUPABASE_URL?.replace(/\/$/, "");
+  if (!base) {
+    return undefined;
+  }
+  const encodedPath = objectPath.split("/").map(encodeURIComponent).join("/");
+  return `${base}/storage/v1/object/public/${bucket}/${encodedPath}`;
 }
 
 function escapeRegexSegment(value: string): string {
@@ -103,10 +131,16 @@ export async function generateVerificationUploadTarget(
       ? `${sellerId}/product-media/${productId ?? "draft"}/${kind}/${Date.now()}-${safeFilename}`
       : `${sellerId}/${kind}/${Date.now()}-${safeFilename}`;
 
+  const bucket = isProductMediaKind(kind)
+    ? env.SUPABASE_PRODUCT_MEDIA_BUCKET
+    : env.SUPABASE_VERIFICATION_BUCKET;
+
   if (!isSupabaseConfigured()) {
+    const mockBase = `https://mock-upload.local/${bucket}/${path}`;
     return {
       path,
-      uploadUrl: `https://mock-upload.local/${env.SUPABASE_VERIFICATION_BUCKET}/${path}`,
+      uploadUrl: mockBase,
+      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
@@ -114,30 +148,38 @@ export async function generateVerificationUploadTarget(
 
   const supabase = createSupabaseAdminClient();
   if (!supabase) {
+    const mockBase = `https://mock-upload.local/${bucket}/${path}`;
     return {
       path,
-      uploadUrl: `https://mock-upload.local/${env.SUPABASE_VERIFICATION_BUCKET}/${path}`,
+      uploadUrl: mockBase,
+      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
   }
 
-  const bucket = env.SUPABASE_VERIFICATION_BUCKET;
   const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(path);
 
   if (error || !data?.signedUrl) {
     console.error("[verification] createSignedUploadUrl", error);
+    const mockBase = `https://mock-upload.local/${bucket}/${path}`;
     return {
       path,
-      uploadUrl: `https://mock-upload.local/${bucket}/${path}`,
+      uploadUrl: mockBase,
+      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
   }
 
+  const publicUrl = isProductMediaKind(kind)
+    ? storagePublicObjectUrl(bucket, path)
+    : undefined;
+
   return {
     path,
     uploadUrl: data.signedUrl,
+    ...(publicUrl ? { publicUrl } : {}),
     expiresIn: 3600,
     provider: "supabase",
   };

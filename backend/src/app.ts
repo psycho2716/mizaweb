@@ -1248,7 +1248,7 @@ const createProductBodySchema = z
         };
     });
 
-app.post("/products", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.post("/products", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const parsed = createProductBodySchema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
@@ -1272,7 +1272,15 @@ app.post("/products", authenticate, authorizeRole(["seller"]), (request, respons
         ...(parsed.data.model3dUrl ? { model3dUrl: parsed.data.model3dUrl } : {})
     };
     db.products.set(id, product as ProductRecord);
-    persistProduct(product as ProductRecord);
+    try {
+        await persistProduct(product as ProductRecord);
+    } catch (err) {
+        db.products.delete(id);
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to save product"
+        });
+        return;
+    }
 
     for (const url of parsed.data.imageUrls) {
         const mediaId = `pm-${randomUUID()}`;
@@ -1281,12 +1289,23 @@ app.post("/products", authenticate, authorizeRole(["seller"]), (request, respons
         persistProductMedia(media);
     }
 
-    syncProductDimensionAndColorOptions(id, parsed.data.dimensionChoices, parsed.data.colorChoices);
+    try {
+        await syncProductDimensionAndColorOptions(
+            id,
+            parsed.data.dimensionChoices,
+            parsed.data.colorChoices
+        );
+    } catch (err) {
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to save dimension/color options"
+        });
+        return;
+    }
 
     response.status(201).json({ id });
 });
 
-app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
     const product = db.products.get(id);
     if (!product || product.sellerId !== request.authUserId) {
@@ -1360,7 +1379,14 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, re
         const colOpt = opts.find((o) => o.name === PRODUCT_COLORS_OPTION_NAME);
         const dims = parsed.data.dimensionChoices ?? dimOpt?.values ?? [];
         const cols = parsed.data.colorChoices ?? colOpt?.values ?? [];
-        syncProductDimensionAndColorOptions(id, dims, cols);
+        try {
+            await syncProductDimensionAndColorOptions(id, dims, cols);
+        } catch (err) {
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save dimension/color options"
+            });
+            return;
+        }
     }
 
     if (parsed.data.imageUrls !== undefined) {
@@ -1378,11 +1404,18 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, re
         }
     }
 
-    persistProduct(product);
+    try {
+        await persistProduct(product);
+    } catch (err) {
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to save product"
+        });
+        return;
+    }
     response.json({ ok: true, data: product });
 });
 
-app.post("/products/:id/publish", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.post("/products/:id/publish", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
     const product = db.products.get(id);
     if (!product || product.sellerId !== request.authUserId) {
@@ -1397,7 +1430,15 @@ app.post("/products/:id/publish", authenticate, authorizeRole(["seller"]), (requ
     }
 
     product.isPublished = true;
-    persistProduct(product);
+    try {
+        await persistProduct(product);
+    } catch (err) {
+        product.isPublished = false;
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to save product"
+        });
+        return;
+    }
     response.json({ ok: true });
 });
 
@@ -1405,7 +1446,7 @@ app.post(
     "/products/:id/unpublish",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const id = z.string().min(1).parse(request.params.id);
         const product = db.products.get(id);
         if (!product || product.sellerId !== request.authUserId) {
@@ -1413,7 +1454,15 @@ app.post(
             return;
         }
         product.isPublished = false;
-        persistProduct(product);
+        try {
+            await persistProduct(product);
+        } catch (err) {
+            product.isPublished = true;
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save product"
+            });
+            return;
+        }
         response.json({ ok: true });
     }
 );
@@ -1587,7 +1636,7 @@ app.post(
     "/products/:id/customization-options",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const productId = z.string().min(1).parse(request.params.id);
         const product = db.products.get(productId);
         if (!product || product.sellerId !== request.authUserId) {
@@ -1606,7 +1655,15 @@ app.post(
         const id = `co-${Date.now()}`;
         const option = { id, productId, name: parsed.data.name, values: parsed.data.values };
         db.customizationOptions.set(id, option);
-        persistCustomizationOption(option);
+        try {
+            await persistCustomizationOption(option);
+        } catch (err) {
+            db.customizationOptions.delete(id);
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save customization option"
+            });
+            return;
+        }
         response.status(201).json({ id });
     }
 );
@@ -1615,7 +1672,7 @@ app.patch(
     "/products/:id/customization-options/:optionId",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const productId = z.string().min(1).parse(request.params.id);
         const optionId = z.string().min(1).parse(request.params.optionId);
         const option = db.customizationOptions.get(optionId);
@@ -1632,9 +1689,20 @@ app.patch(
             response.status(400).json({ error: parsed.error.flatten() });
             return;
         }
+        const prevName = option.name;
+        const prevValues = [...option.values];
         option.name = parsed.data.name ?? option.name;
         option.values = parsed.data.values ?? option.values;
-        persistCustomizationOption(option);
+        try {
+            await persistCustomizationOption(option);
+        } catch (err) {
+            option.name = prevName;
+            option.values = prevValues;
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save customization option"
+            });
+            return;
+        }
         response.json({ ok: true, data: option });
     }
 );

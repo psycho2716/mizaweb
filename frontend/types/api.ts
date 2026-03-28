@@ -139,6 +139,8 @@ export interface AdminUsersListResponse {
 export interface VerificationUploadTarget {
   path: string;
   uploadUrl: string;
+  /** Persist this after a successful PUT when present (public object URL). */
+  publicUrl?: string;
   expiresIn: number;
   provider: "supabase" | "mock";
 }

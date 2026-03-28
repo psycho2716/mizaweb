@@ -178,6 +178,13 @@ export function publishProduct(productId: string) {
     });
 }
 
+export function unpublishProduct(productId: string) {
+    return apiFetch<{ ok: boolean }>(`/products/${productId}/unpublish`, {
+        method: "POST",
+        body: JSON.stringify({})
+    });
+}
+
 export function getPublishedProducts() {
     return apiFetch<ProductsResponse>("/products");
 }

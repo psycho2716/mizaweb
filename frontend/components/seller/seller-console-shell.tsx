@@ -183,7 +183,7 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                     })}
                 </nav>
 
-                <div className="flex flex-1 flex-col overflow-auto">{children}</div>
+                <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
             </div>
         </div>
     );

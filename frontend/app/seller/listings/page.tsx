@@ -31,6 +31,7 @@ import {
     getSellerProducts,
     imageFileTo3dModel,
     publishProduct,
+    unpublishProduct,
     updateProduct
 } from "@/lib/api/endpoints";
 import {
@@ -43,7 +44,8 @@ import type {
     Product,
     ProductDetail,
     SellerProductCreateInput,
-    SellerProductPatchInput
+    SellerProductPatchInput,
+    VerificationUploadTarget
 } from "@/types";
 import { sellerProductFormSchema, type SellerProductFormValues } from "@/types";
 
@@ -152,17 +154,21 @@ function readFileAsBase64(file: File): Promise<string> {
     });
 }
 
+function persistedMediaUrl(target: VerificationUploadTarget): string {
+    return target.publicUrl?.trim() || target.uploadUrl;
+}
+
 async function uploadProductModel3dBlob(productId: string, blob: Blob): Promise<string> {
     const target = await createProductModel3dUploadUrl(productId, "model.glb");
     const putRes = await fetch(target.uploadUrl, {
         method: "PUT",
         body: blob,
-        headers: { "Content-Type": "model/gltf-binary" }
+        headers: { "Content-Type": "application/octet-stream" }
     });
     if (!putRes.ok) {
         throw new Error("3D model upload failed");
     }
-    return target.uploadUrl;
+    return persistedMediaUrl(target);
 }
 
 async function uploadProductImageFile(productId: string, file: File): Promise<void> {
@@ -175,7 +181,7 @@ async function uploadProductImageFile(productId: string, file: File): Promise<vo
     if (!putRes.ok) {
         throw new Error("Image upload failed");
     }
-    await addProductMedia(productId, target.uploadUrl);
+    await addProductMedia(productId, persistedMediaUrl(target));
 }
 
 async function uploadProductVideoFile(productId: string, file: File): Promise<string> {
@@ -188,7 +194,7 @@ async function uploadProductVideoFile(productId: string, file: File): Promise<st
     if (!putRes.ok) {
         throw new Error("Video upload failed");
     }
-    return target.uploadUrl;
+    return persistedMediaUrl(target);
 }
 
 function MediaThumb({
@@ -458,6 +464,88 @@ function ProductFormFields({
     );
 }
 
+/** Centered overlay for create / edit listing flows (Escape + backdrop close). */
+function ListingFormModal({
+    open,
+    title,
+    description,
+    headerExtras,
+    onClose,
+    children
+}: {
+    open: boolean;
+    title: string;
+    description?: string;
+    headerExtras?: ReactNode;
+    onClose: () => void;
+    children: ReactNode;
+}) {
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                onClose();
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [open, onClose]);
+
+    if (!open) {
+        return null;
+    }
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
+            role="presentation"
+        >
+            <button
+                type="button"
+                aria-label="Close dialog"
+                className="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
+                onClick={onClose}
+            />
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="listing-modal-title"
+                className="relative z-10 flex max-h-[min(92vh,880px)] w-full max-w-3xl flex-col rounded-xl border border-(--border) bg-(--surface) shadow-[0_24px_80px_-20px_rgba(0,0,0,0.85)]"
+            >
+                <div className="flex shrink-0 items-start justify-between gap-3 border-b border-(--border) px-5 py-4">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <h2
+                                id="listing-modal-title"
+                                className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground"
+                            >
+                                {title}
+                            </h2>
+                            {headerExtras}
+                        </div>
+                        {description ? (
+                            <p className="mt-2 text-xs text-(--muted)">{description}</p>
+                        ) : null}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="shrink-0 rounded-md p-1.5 text-(--muted) transition-colors hover:bg-(--surface-elevated) hover:text-foreground"
+                        aria-label="Close"
+                    >
+                        <X className="h-4 w-4" aria-hidden />
+                    </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export default function SellerListingsPage() {
     const [products, setProducts] = useState<Product[]>([]);
     const [selected, setSelected] = useState<ProductDetail | null>(null);
@@ -491,6 +579,17 @@ export default function SellerListingsPage() {
         resolver: zodResolver(sellerProductFormSchema),
         defaultValues: defaultFormValues
     });
+
+    useEffect(() => {
+        const locked = showCreatePanel || selected !== null;
+        const prev = document.body.style.overflow;
+        if (locked) {
+            document.body.style.overflow = "hidden";
+        }
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, [showCreatePanel, selected]);
 
     const createMadeToOrder = createForm.watch("madeToOrder");
     const editMadeToOrder = editForm.watch("madeToOrder");
@@ -918,7 +1017,7 @@ export default function SellerListingsPage() {
                 if (prev) URL.revokeObjectURL(prev.previewUrl);
                 return { blob, previewUrl: URL.createObjectURL(blob) };
             });
-            toast.success("3D model ready — it uploads to your bucket when you save.");
+            toast.success("3D model ready — it uploads when you update or publish.");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Generation failed");
         } finally {
@@ -965,34 +1064,43 @@ export default function SellerListingsPage() {
         }
     }
 
-    async function handleEditSubmit(values: SellerProductFormValues) {
+    async function handleEditSubmit(
+        values: SellerProductFormValues,
+        opts?: { publishAfter?: boolean }
+    ) {
         if (!selected) return;
+        const productId = selected.id;
+        const shouldPublish = opts?.publishAfter === true;
         try {
             let videoUrlForPatch = "";
             if (editVideo?.kind === "server") {
                 videoUrlForPatch = editVideo.url;
             } else if (editVideo?.kind === "local") {
                 if (selected.videoUrl) {
-                    await updateProduct(selected.id, { videoUrl: "" });
+                    await updateProduct(productId, { videoUrl: "" });
                 }
-                videoUrlForPatch = await uploadProductVideoFile(selected.id, editVideo.file);
+                videoUrlForPatch = await uploadProductVideoFile(productId, editVideo.file);
             }
 
             for (const entry of editImages) {
                 if (entry.kind === "local") {
-                    await uploadProductImageFile(selected.id, entry.file);
+                    await uploadProductImageFile(productId, entry.file);
                 }
             }
 
             let model3dUrlForPatch = (selected.model3dUrl ?? "").trim();
             if (edit3dGlb) {
-                model3dUrlForPatch = await uploadProductModel3dBlob(selected.id, edit3dGlb.blob);
+                model3dUrlForPatch = await uploadProductModel3dBlob(productId, edit3dGlb.blob);
             }
 
             await updateProduct(
-                selected.id,
+                productId,
                 buildPatchPayload(values, videoUrlForPatch, model3dUrlForPatch)
             );
+
+            if (shouldPublish) {
+                await publishProduct(productId);
+            }
 
             setEditImages((prev) => {
                 prev.forEach((e) => {
@@ -1013,9 +1121,9 @@ export default function SellerListingsPage() {
                 return null;
             });
 
-            await openProductForEdit(selected.id);
+            await openProductForEdit(productId);
             await loadProducts();
-            toast.success("Product updated.");
+            toast.success(shouldPublish ? "Listing published." : "Listing updated.");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Update failed");
         }
@@ -1031,6 +1139,19 @@ export default function SellerListingsPage() {
             toast.success("Published.");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Publish failed");
+        }
+    }
+
+    async function handleUnpublishProduct(productId: string) {
+        try {
+            await unpublishProduct(productId);
+            await loadProducts();
+            if (selected?.id === productId) {
+                await openProductForEdit(productId);
+            }
+            toast.success("Unpublished.");
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Unpublish failed");
         }
     }
 
@@ -1083,38 +1204,31 @@ export default function SellerListingsPage() {
                     </div>
                     <Button
                         type="button"
-                        onClick={() => (showCreatePanel ? closeCreatePanel() : openCreatePanel())}
+                        onClick={() => {
+                            if (showCreatePanel) {
+                                closeCreatePanel();
+                            } else {
+                                closeEditPanel();
+                                openCreatePanel();
+                            }
+                        }}
                         className={cn(btnPrimary, "ml-2 gap-2")}
                         aria-expanded={showCreatePanel}
                     >
                         <Plus className="h-4 w-4 shrink-0" aria-hidden />
-                        {showCreatePanel ? "Close" : "New product"}
+                        New product
                     </Button>
                 </div>
             </div>
 
-            {showCreatePanel ? (
-                <div className="mb-6 rounded-lg border border-(--border) bg-(--surface) p-5">
-                    <div className="flex items-start justify-between gap-3">
-                        <div>
-                            <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground">
-                                New product
-                            </h2>
-                            <p className="mt-2 text-xs text-(--muted)">
-                                Create a draft listing, then publish when ready.
-                            </p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={closeCreatePanel}
-                            className="rounded-md p-1.5 text-(--muted) transition-colors hover:bg-(--surface-elevated) hover:text-foreground"
-                            aria-label="Close create form"
-                        >
-                            <X className="h-4 w-4" aria-hidden />
-                        </button>
-                    </div>
+            <ListingFormModal
+                open={showCreatePanel}
+                onClose={closeCreatePanel}
+                title="New product"
+                description="Create a draft listing. You can publish from the table or after editing."
+            >
                     <form
-                        className="mt-4 grid gap-4 sm:grid-cols-2"
+                        className="grid gap-4 sm:grid-cols-2"
                         onSubmit={createForm.handleSubmit(handleCreate)}
                     >
                         <ProductFormFields
@@ -1349,35 +1463,35 @@ export default function SellerListingsPage() {
                             </Button>
                         </div>
                     </form>
-                </div>
-            ) : null}
+            </ListingFormModal>
 
-            {selected ? (
-                <div className="mb-6 rounded-lg border border-(--border) bg-(--surface) p-5">
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                            <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground">
-                                Edit specimen
-                            </h2>
-                            <Link
-                                href={`/seller/listings/${selected.id}`}
-                                className="text-xs font-medium text-(--accent) underline-offset-2 hover:underline"
-                            >
-                                Full page editor
-                            </Link>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={closeEditPanel}
-                            className="rounded-md p-1.5 text-(--muted) transition-colors hover:bg-(--surface-elevated) hover:text-foreground"
-                            aria-label="Close edit form"
+            <ListingFormModal
+                open={selected !== null}
+                onClose={closeEditPanel}
+                title="Edit listing"
+                description={
+                    selected?.isPublished
+                        ? "Update listing saves changes to your live product."
+                        : "Publish listing saves everything and sets the product live (verification rules still apply)."
+                }
+                headerExtras={
+                    selected ? (
+                        <Link
+                            href={`/seller/listings/${selected.id}`}
+                            className="text-xs font-medium text-(--accent) underline-offset-2 hover:underline"
                         >
-                            <X className="h-4 w-4" aria-hidden />
-                        </button>
-                    </div>
+                            Full page editor
+                        </Link>
+                    ) : null
+                }
+            >
                     <form
-                        className="mt-4 grid gap-4 sm:grid-cols-2"
-                        onSubmit={editForm.handleSubmit(handleEditSubmit)}
+                        className="grid gap-4 sm:grid-cols-2"
+                        onSubmit={editForm.handleSubmit((values) =>
+                            handleEditSubmit(values, {
+                                publishAfter: !selected?.isPublished
+                            })
+                        )}
                     >
                         <ProductFormFields
                             register={editForm.register}
@@ -1452,8 +1566,8 @@ export default function SellerListingsPage() {
                                             ) : null}
                                         </div>
                                         <p className="text-xs text-(--muted)">
-                                            New images upload when you save. Remove saved images
-                                            immediately.
+                                            New images upload when you update or publish. Remove saved
+                                            images immediately.
                                         </p>
                                     </div>
                                     <div className="grid gap-2">
@@ -1520,7 +1634,7 @@ export default function SellerListingsPage() {
                                             Upload a 2D photo and generate a new GLB, or keep the
                                             saved model below. New models upload to your bucket only
                                             when you click{" "}
-                                            <span className="text-foreground">Save changes</span>.
+                                            <span className="text-foreground">Update or publish</span>.
                                         </p>
                                     </div>
                                     <div className="flex flex-wrap items-end gap-3">
@@ -1595,7 +1709,7 @@ export default function SellerListingsPage() {
                                                     <>
                                                         <p className="text-xs text-(--muted)">
                                                             New generated model — replaces the saved
-                                                            GLB when you save.
+                                                            GLB when you update or publish.
                                                         </p>
                                                         <button
                                                             type="button"
@@ -1608,7 +1722,7 @@ export default function SellerListingsPage() {
                                                 ) : (
                                                     <p className="text-xs text-(--muted)">
                                                         Saved listing model — upload a new 2D photo
-                                                        and generate to replace on save.
+                                                        and generate to replace on update or publish.
                                                     </p>
                                                 )
                                             }
@@ -1651,35 +1765,36 @@ export default function SellerListingsPage() {
                             }
                         />
                         <div className="flex flex-wrap gap-2 sm:col-span-2">
-                            <Button type="submit" className={btnPrimary}>
-                                Save changes
+                            <Button
+                                type="submit"
+                                disabled={editForm.formState.isSubmitting}
+                                className={btnPrimary}
+                            >
+                                {editForm.formState.isSubmitting
+                                    ? "Working…"
+                                    : selected?.isPublished
+                                      ? "Update listing"
+                                      : "Publish listing"}
                             </Button>
-                            {!selected.isPublished ? (
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    className={btnOutline}
-                                    onClick={() => void handlePublishProduct(selected.id)}
-                                >
-                                    Publish
-                                </Button>
-                            ) : null}
                             <Button
                                 type="button"
                                 variant="outline"
                                 className="border-red-500/40 text-red-300 hover:bg-red-950/30"
-                                onClick={() => void handleDeleteProduct(selected.id)}
+                                onClick={() => {
+                                    if (selected) {
+                                        void handleDeleteProduct(selected.id);
+                                    }
+                                }}
                             >
                                 Delete
                             </Button>
                         </div>
                     </form>
-                </div>
-            ) : null}
+            </ListingFormModal>
 
             <div className="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
                 <div className="overflow-x-auto">
-                    <table className="w-full min-w-[720px] border-collapse">
+                    <table className="w-full min-w-[820px] border-collapse">
                         <thead className="bg-[#080b10]">
                             <tr>
                                 <th className={tableHead}>Title</th>
@@ -1750,7 +1865,19 @@ export default function SellerListingsPage() {
                                             >
                                                 Edit
                                             </Button>
-                                            {!product.isPublished ? (
+                                            {product.isPublished ? (
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className={cn(btnOutline, "h-8 text-xs")}
+                                                    onClick={() =>
+                                                        void handleUnpublishProduct(product.id)
+                                                    }
+                                                >
+                                                    Unpublish
+                                                </Button>
+                                            ) : (
                                                 <Button
                                                     type="button"
                                                     variant="outline"
@@ -1762,7 +1889,7 @@ export default function SellerListingsPage() {
                                                 >
                                                     Publish
                                                 </Button>
-                                            ) : null}
+                                            )}
                                             <Button
                                                 type="button"
                                                 variant="outline"

@@ -507,10 +507,16 @@ export function deleteSellerStatusBySellerId(sellerId: string): void {
     void supabase.from("app_seller_status").delete().eq("seller_id", sellerId);
 }
 
-export function persistProduct(row: ProductRecord): void {
+/**
+ * Persists product to Supabase before returning API success. Required so the next request
+ * (upload-url, PATCH) is not wiped by `syncFromSupabaseIfStale` reloading an empty/partial DB view.
+ */
+export async function persistProduct(row: ProductRecord): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_products").upsert(
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_products").upsert(
         {
             id: row.id,
             seller_id: row.sellerId,
@@ -527,6 +533,10 @@ export function persistProduct(row: ProductRecord): void {
         },
         { onConflict: "id" }
     );
+    if (error) {
+        console.error("[persistProduct]", error.message);
+        throw new Error(`Failed to persist product: ${error.message}`);
+    }
 }
 
 export function deleteProduct(productId: string): void {
@@ -549,15 +559,21 @@ export function deleteProductMedia(mediaId: string): void {
     void supabase.from("app_product_media").delete().eq("id", mediaId);
 }
 
-export function persistCustomizationOption(row: CustomizationOption): void {
+export async function persistCustomizationOption(row: CustomizationOption): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase
         .from("app_customization_options")
         .upsert(
             { id: row.id, product_id: row.productId, name: row.name, values: row.values },
             { onConflict: "id" }
         );
+    if (error) {
+        console.error("[persistCustomizationOption]", error.message);
+        throw new Error(`Failed to persist customization option: ${error.message}`);
+    }
 }
 
 export function persistCustomizationRule(row: CustomizationRule): void {
@@ -577,10 +593,16 @@ export function deleteCustomizationOptionsByProduct(productId: string): void {
     void supabase.from("app_customization_options").delete().eq("product_id", productId);
 }
 
-export function deleteCustomizationOptionById(optionId: string): void {
+export async function deleteCustomizationOptionById(optionId: string): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_customization_options").delete().eq("id", optionId);
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_customization_options").delete().eq("id", optionId);
+    if (error) {
+        console.error("[deleteCustomizationOptionById]", error.message);
+        throw new Error(`Failed to delete customization option: ${error.message}`);
+    }
 }
 
 export function deleteCustomizationRulesByProduct(productId: string): void {
