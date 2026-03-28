@@ -6,6 +6,13 @@ export interface Product {
   basePrice: number;
   isPublished: boolean;
   model3dUrl?: string;
+  /** Buyer-specific production; when true, `stockQuantity` is not used. */
+  madeToOrder?: boolean;
+  /** In-stock units when not made-to-order. */
+  stockQuantity?: number;
+  isFeatured?: boolean;
+  /** Single product video (max one per listing). */
+  videoUrl?: string;
 }
 
 export interface ProductMedia {
@@ -33,6 +40,24 @@ export interface ProductDetail extends Product {
   options: ProductOption[];
   rules: ProductRule[];
 }
+
+/** Payload for POST `/products` (seller create listing). */
+export interface SellerProductCreateInput {
+  title: string;
+  description: string;
+  basePrice: number;
+  madeToOrder?: boolean;
+  stockQuantity?: number;
+  isFeatured?: boolean;
+  dimensionChoices?: string[];
+  colorChoices?: string[];
+  imageUrls?: string[];
+  videoUrl?: string;
+  model3dUrl?: string;
+}
+
+/** Payload for PATCH `/products/:id`. */
+export type SellerProductPatchInput = Partial<SellerProductCreateInput>;
 
 export interface SellerPublicProfile {
   id: string;

@@ -1,11 +1,6 @@
 import type { ReactNode } from "react";
-import { SellerVerificationBanner } from "@/components/seller-verification-banner";
+import { SellerLayoutClient } from "@/components/seller/seller-layout-client";
 
 export default function SellerLayout({ children }: { children: ReactNode }) {
-    return (
-        <>
-            <SellerVerificationBanner />
-            {children}
-        </>
-    );
+  return <SellerLayoutClient>{children}</SellerLayoutClient>;
 }

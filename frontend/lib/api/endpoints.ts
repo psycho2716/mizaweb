@@ -15,6 +15,8 @@ import type {
     SellerPaymentMethodsResponse,
     SellerPublicProfile,
     SellerProfileResponse,
+    SellerProductCreateInput,
+    SellerProductPatchInput,
     AdminUsersListResponse,
     VerificationQueueResponse,
     VerificationStatusResponse,
@@ -162,7 +164,7 @@ export function rejectVerification(verificationId: string, reason: string) {
     });
 }
 
-export function createProduct(payload: { title: string; description: string; basePrice: number }) {
+export function createProduct(payload: SellerProductCreateInput) {
     return apiFetch<ProductCreateResponse>("/products", {
         method: "POST",
         body: JSON.stringify(payload)
@@ -204,18 +206,61 @@ export function getSellerProductDetail(productId: string) {
     return apiFetch<ProductDetailResponse>(`/seller/products/${productId}`);
 }
 
-export function updateProduct(
-    productId: string,
-    payload: Partial<{
-        title: string;
-        description: string;
-        basePrice: number;
-        model3dUrl: string;
-    }>
-) {
+export function updateProduct(productId: string, payload: SellerProductPatchInput) {
     return apiFetch<{ ok: boolean }>(`/products/${productId}`, {
         method: "PATCH",
         body: JSON.stringify(payload)
+    });
+}
+
+export interface FalImageTo3dResponse {
+    falGlbUrl: string;
+}
+
+/** Generate a GLB via Fal Trellis 2 from a public image URL (returns temporary Fal CDN URL). */
+export function imageUrlTo3dModel(imageUrl: string) {
+    return apiFetch<FalImageTo3dResponse>("/seller/ai/image-to-3d", {
+        method: "POST",
+        body: JSON.stringify({ imageUrl })
+    });
+}
+
+/** Generate a GLB from an uploaded 2D image (base64 + mime). */
+export function imageFileTo3dModel(imageBase64: string, mimeType: string) {
+    return apiFetch<FalImageTo3dResponse>("/seller/ai/image-to-3d", {
+        method: "POST",
+        body: JSON.stringify({ imageBase64, mimeType })
+    });
+}
+
+export function createProductModel3dUploadUrl(productId: string, filename = "model.glb") {
+    return apiFetch<VerificationUploadTarget>(`/products/${productId}/model-3d/upload-url`, {
+        method: "POST",
+        body: JSON.stringify({ filename })
+    });
+}
+
+export function createProductMediaUploadUrl(
+    productId: string,
+    filename: string,
+    assetKind: "image" | "video"
+) {
+    return apiFetch<VerificationUploadTarget>(`/products/${productId}/media/upload-url`, {
+        method: "POST",
+        body: JSON.stringify({ filename, assetKind })
+    });
+}
+
+export function addProductMedia(productId: string, url: string) {
+    return apiFetch<{ id: string }>(`/products/${productId}/media`, {
+        method: "POST",
+        body: JSON.stringify({ url })
+    });
+}
+
+export function deleteProductMedia(productId: string, mediaId: string) {
+    return apiFetch<{ ok: boolean }>(`/products/${productId}/media/${mediaId}`, {
+        method: "DELETE"
     });
 }
 

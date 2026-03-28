@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { AdminSellerLocationMap } from "@/components/admin/admin-seller-location-map";
 import { AdminConsoleShell } from "@/components/admin/admin-console-shell";
 import { AdminTablePagination } from "@/components/admin/admin-table-pagination";
 import { Button } from "@/components/ui/button";
@@ -405,7 +406,7 @@ export default function AdminUsersPage() {
           aria-modal="true"
           aria-labelledby="admin-user-profile-title"
         >
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md border border-(--border) bg-[#0a0d12] p-5 shadow-xl">
+          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-md border border-(--border) bg-[#0a0d12] p-5 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <h2 id="admin-user-profile-title" className="text-base font-semibold text-foreground">
                 User profile
@@ -470,10 +471,23 @@ export default function AdminUsersPage() {
                       Business
                     </p>
                     <p>
+                      <span className="font-semibold text-foreground">Business name: </span>
                       <span className="text-foreground">{detail.profile.businessName}</span>
                     </p>
-                    <p className="mt-1">{detail.profile.contactNumber}</p>
-                    <p className="mt-1">{detail.profile.address}</p>
+                    <p className="mt-1">
+                      <span className="font-semibold text-foreground">Phone number: </span>
+                      {detail.profile.contactNumber}
+                    </p>
+                    <p className="mt-1">
+                      <span className="font-semibold text-foreground">Location / address: </span>
+                      {detail.profile.address}
+                    </p>
+                    <AdminSellerLocationMap
+                      latitude={detail.profile.shopLatitude}
+                      longitude={detail.profile.shopLongitude}
+                      address={detail.profile.address}
+                      className="mt-3 border-t border-(--border) pt-3"
+                    />
                   </div>
                 ) : null}
                 {detail.paymentMethods.length > 0 ? (

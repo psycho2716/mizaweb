@@ -8,3 +8,7 @@ comment on column app_products.made_to_order is 'When true, stock_quantity is un
 comment on column app_products.stock_quantity is 'Units in stock; required when made_to_order is false.';
 comment on column app_products.is_featured is 'Surface on landing highlights when published.';
 comment on column app_products.video_url is 'Single product video URL (max one per product).';
+
+update app_products
+set stock_quantity = coalesce(stock_quantity, 0)
+where coalesce(made_to_order, false) = false;

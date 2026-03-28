@@ -10,6 +10,9 @@ import type { Order, OrderMessage } from "@/types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
+const fieldClass =
+    "h-10 w-full rounded-md border border-(--border) bg-[#080b10] px-3 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/25";
+
 export default function BuyerOrdersPage() {
     const [orders, setOrders] = useState<Order[]>([]);
     const [paymentMethod, setPaymentMethod] = useState<"cash" | "online">("cash");
@@ -102,16 +105,30 @@ export default function BuyerOrdersPage() {
     }
 
     return (
-        <main className="mx-auto max-w-4xl space-y-4 p-6">
+        <main className="mx-auto w-full max-w-4xl flex-1 space-y-6 px-4 py-8 sm:px-6 lg:py-10">
+            <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
+                    Orders & checkout
+                </p>
+                <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
+                    Your purchases
+                </h1>
+                <p className="mt-2 text-sm text-(--muted)">
+                    Complete checkout from your cart, then track orders and message the seller.
+                </p>
+            </div>
+
             <Card>
                 <CardHeader>
                     <CardTitle>Checkout</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                     <label className="block text-sm">
-                        <span className="mb-1 block">Payment method</span>
+                        <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                            Payment method
+                        </span>
                         <select
-                            className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                            className={fieldClass}
                             value={paymentMethod}
                             onChange={(event) =>
                                 setPaymentMethod(event.target.value as "cash" | "online")
@@ -123,9 +140,11 @@ export default function BuyerOrdersPage() {
                     </label>
                     {paymentMethod === "online" ? (
                         <label className="block text-sm">
-                            <span className="mb-1 block">Payment reference</span>
+                            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                                Payment reference
+                            </span>
                             <input
-                                className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                                className={fieldClass}
                                 value={paymentReference}
                                 onChange={(event) => setPaymentReference(event.target.value)}
                                 placeholder="Transaction or reference number"
@@ -140,23 +159,28 @@ export default function BuyerOrdersPage() {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>My Orders</CardTitle>
+                    <CardTitle>My orders</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-3">
                     {sortedOrders.map((order) => (
-                        <div key={order.id} className="rounded border border-zinc-200 p-3 text-sm">
-                            <p className="font-medium">{order.id}</p>
-                            <p>Status: {order.status}</p>
-                            <p>Payment: {order.paymentMethod}</p>
-                            <p>Total: PHP {order.totalAmount}</p>
-                            <p className="text-zinc-600">
+                        <div
+                            key={order.id}
+                            className="rounded-lg border border-(--border) bg-[#080b10] p-4 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                        >
+                            <p className="font-mono text-xs text-(--muted)">{order.id}</p>
+                            <p className="mt-1 font-medium text-foreground">Status: {order.status}</p>
+                            <p className="text-(--muted)">Payment: {order.paymentMethod}</p>
+                            <p className="font-semibold text-(--accent)">
+                                PHP {order.totalAmount.toLocaleString()}
+                            </p>
+                            <p className="text-xs text-(--muted)">
                                 {new Date(order.createdAt).toLocaleString()}
                             </p>
                             <Button
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                className="mt-2"
+                                className="mt-3"
                                 onClick={() => setActiveOrderId(order.id)}
                             >
                                 Open chat
@@ -164,7 +188,7 @@ export default function BuyerOrdersPage() {
                         </div>
                     ))}
                     {sortedOrders.length === 0 ? (
-                        <p className="text-sm text-zinc-600">No orders yet.</p>
+                        <p className="text-sm text-(--muted)">No orders yet.</p>
                     ) : null}
                 </CardContent>
             </Card>
@@ -172,26 +196,29 @@ export default function BuyerOrdersPage() {
             {activeOrderId ? (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Order Chat: {activeOrderId}</CardTitle>
+                        <CardTitle className="font-mono text-base">Order chat · {activeOrderId}</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                        <div className="max-h-64 space-y-2 overflow-auto rounded border border-zinc-200 p-3 text-sm">
+                        <div className="max-h-64 space-y-2 overflow-auto rounded-lg border border-(--border) bg-[#080b10] p-3 text-sm">
                             {messages.map((message) => (
-                                <div key={message.id} className="rounded bg-zinc-100 p-2">
-                                    <p className="font-medium">{message.senderId}</p>
-                                    <p>{message.body}</p>
-                                    <p className="text-xs text-zinc-500">
+                                <div
+                                    key={message.id}
+                                    className="rounded-md border border-(--border) bg-(--surface) p-2"
+                                >
+                                    <p className="text-xs font-semibold text-(--accent)">{message.senderId}</p>
+                                    <p className="text-foreground">{message.body}</p>
+                                    <p className="text-[10px] text-(--muted)">
                                         {new Date(message.createdAt).toLocaleString()}
                                     </p>
                                 </div>
                             ))}
                             {messages.length === 0 ? (
-                                <p className="text-zinc-600">No messages yet.</p>
+                                <p className="text-(--muted)">No messages yet.</p>
                             ) : null}
                         </div>
                         <div className="flex gap-2">
                             <input
-                                className="h-10 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm"
+                                className={`${fieldClass} flex-1`}
                                 value={messageInput}
                                 onChange={(event) => setMessageInput(event.target.value)}
                                 placeholder="Type your message to seller..."

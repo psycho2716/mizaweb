@@ -41,14 +41,20 @@ import {
     persistVerification,
     syncFromSupabaseIfStale
 } from "./integrations/supabase/persistence";
+import { generateGlbUrlFromImageBuffer, generateGlbUrlFromImageUrl } from "./lib/fal-image-to-3d";
 import { hashPassword, verifyPassword } from "./lib/password";
+import {
+    PRODUCT_COLORS_OPTION_NAME,
+    PRODUCT_DIMENSIONS_OPTION_NAME,
+    syncProductDimensionAndColorOptions
+} from "./lib/product-customization";
 import { emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
 import {
     createSignedVerificationDownloadUrl,
     extractVerificationObjectPath,
     generateVerificationUploadTarget
 } from "./modules/verification/verification-storage";
-import type { AuthUser } from "./types/domain";
+import type { AuthUser, ProductRecord } from "./types/domain";
 
 const app = express();
 
@@ -118,7 +124,7 @@ async function adminDeleteUserAccount(
 app.use(helmet());
 app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
 app.use(morgan("dev"));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "12mb" }));
 app.use(cookieParser());
 app.use((request, response, next) => {
     const requestId = request.header("x-request-id") ?? randomUUID();
@@ -1218,29 +1224,65 @@ app.get("/seller/products/:id", authenticate, authorizeRole(["seller"]), (reques
     response.json({ data: { ...product, media, options, rules } });
 });
 
-app.post("/products", authenticate, authorizeRole(["seller"]), (request, response) => {
-    const schema = z.object({
+const createProductBodySchema = z
+    .object({
         title: z.string().min(2),
         description: z.string().min(3),
-        basePrice: z.number().positive()
+        basePrice: z.number().positive(),
+        madeToOrder: z.boolean().optional(),
+        stockQuantity: z.number().int().min(0).optional(),
+        isFeatured: z.boolean().optional(),
+        dimensionChoices: z.array(z.string()).optional().default([]),
+        colorChoices: z.array(z.string()).optional().default([]),
+        imageUrls: z.array(z.string().url()).max(5).optional().default([]),
+        videoUrl: z.union([z.string().url(), z.literal("")]).optional(),
+        model3dUrl: z.string().url().optional()
+    })
+    .transform((data) => {
+        const madeToOrder = data.madeToOrder === true;
+        return {
+            ...data,
+            madeToOrder,
+            isFeatured: data.isFeatured === true,
+            stockQuantity: madeToOrder ? undefined : (data.stockQuantity ?? 0)
+        };
     });
-    const parsed = schema.safeParse(request.body);
+
+app.post("/products", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const parsed = createProductBodySchema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
         return;
     }
 
     const id = `p-${Date.now()}`;
+    const videoUrl =
+        parsed.data.videoUrl && parsed.data.videoUrl.length > 0 ? parsed.data.videoUrl : undefined;
     const product = {
         id,
         sellerId: request.authUserId as string,
         title: parsed.data.title,
         description: parsed.data.description,
         basePrice: parsed.data.basePrice,
-        isPublished: false
+        isPublished: false,
+        madeToOrder: parsed.data.madeToOrder,
+        stockQuantity: parsed.data.madeToOrder ? undefined : parsed.data.stockQuantity,
+        isFeatured: parsed.data.isFeatured,
+        ...(videoUrl ? { videoUrl } : {}),
+        ...(parsed.data.model3dUrl ? { model3dUrl: parsed.data.model3dUrl } : {})
     };
-    db.products.set(id, product);
-    persistProduct(product);
+    db.products.set(id, product as ProductRecord);
+    persistProduct(product as ProductRecord);
+
+    for (const url of parsed.data.imageUrls) {
+        const mediaId = `pm-${randomUUID()}`;
+        const media = { id: mediaId, productId: id, url };
+        db.productMedia.set(mediaId, media);
+        persistProductMedia(media);
+    }
+
+    syncProductDimensionAndColorOptions(id, parsed.data.dimensionChoices, parsed.data.colorChoices);
+
     response.status(201).json({ id });
 });
 
@@ -1255,19 +1297,87 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), (request, re
         title: z.string().min(2).optional(),
         description: z.string().min(3).optional(),
         basePrice: z.number().positive().optional(),
-        model3dUrl: z.string().url().optional()
+        model3dUrl: z.union([z.string().url(), z.literal("")]).optional(),
+        madeToOrder: z.boolean().optional(),
+        stockQuantity: z.number().int().min(0).optional(),
+        isFeatured: z.boolean().optional(),
+        videoUrl: z.union([z.string().url(), z.literal("")]).optional().nullable(),
+        dimensionChoices: z.array(z.string()).optional(),
+        colorChoices: z.array(z.string()).optional(),
+        imageUrls: z.array(z.string().url()).max(5).optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
         return;
     }
+
+    const nextMadeToOrder = parsed.data.madeToOrder ?? product.madeToOrder;
+    if (
+        !nextMadeToOrder &&
+        product.stockQuantity === undefined &&
+        parsed.data.stockQuantity === undefined
+    ) {
+        response.status(400).json({
+            error: { formErrors: [], fieldErrors: { stockQuantity: ["Required when not made to order"] } }
+        });
+        return;
+    }
+
     product.title = parsed.data.title ?? product.title;
     product.description = parsed.data.description ?? product.description;
     product.basePrice = parsed.data.basePrice ?? product.basePrice;
-    if (parsed.data.model3dUrl) {
-        product.model3dUrl = parsed.data.model3dUrl;
+    if (parsed.data.model3dUrl !== undefined) {
+        if (parsed.data.model3dUrl.length > 0) {
+            product.model3dUrl = parsed.data.model3dUrl;
+        } else {
+            delete product.model3dUrl;
+        }
     }
+    if (parsed.data.madeToOrder !== undefined) {
+        product.madeToOrder = parsed.data.madeToOrder;
+    }
+    if (parsed.data.isFeatured !== undefined) {
+        product.isFeatured = parsed.data.isFeatured;
+    }
+    if (parsed.data.videoUrl !== undefined) {
+        if (parsed.data.videoUrl && parsed.data.videoUrl.length > 0) {
+            product.videoUrl = parsed.data.videoUrl;
+        } else {
+            delete product.videoUrl;
+        }
+    }
+
+    if (nextMadeToOrder) {
+        delete product.stockQuantity;
+    } else if (parsed.data.stockQuantity !== undefined) {
+        product.stockQuantity = parsed.data.stockQuantity;
+    }
+
+    if (parsed.data.dimensionChoices !== undefined || parsed.data.colorChoices !== undefined) {
+        const opts = [...db.customizationOptions.values()].filter((o) => o.productId === id);
+        const dimOpt = opts.find((o) => o.name === PRODUCT_DIMENSIONS_OPTION_NAME);
+        const colOpt = opts.find((o) => o.name === PRODUCT_COLORS_OPTION_NAME);
+        const dims = parsed.data.dimensionChoices ?? dimOpt?.values ?? [];
+        const cols = parsed.data.colorChoices ?? colOpt?.values ?? [];
+        syncProductDimensionAndColorOptions(id, dims, cols);
+    }
+
+    if (parsed.data.imageUrls !== undefined) {
+        for (const media of [...db.productMedia.values()]) {
+            if (media.productId === id) {
+                db.productMedia.delete(media.id);
+                deleteProductMedia(media.id);
+            }
+        }
+        for (const url of parsed.data.imageUrls) {
+            const mediaId = `pm-${randomUUID()}`;
+            const media = { id: mediaId, productId: id, url };
+            db.productMedia.set(mediaId, media);
+            persistProductMedia(media);
+        }
+    }
+
     persistProduct(product);
     response.json({ ok: true, data: product });
 });
@@ -1363,18 +1473,91 @@ app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), (reques
         response.status(404).json({ error: "Not found" });
         return;
     }
+    const imageCount = [...db.productMedia.values()].filter((m) => m.productId === productId).length;
+    if (imageCount >= 5) {
+        response.status(400).json({ error: "Maximum of 5 images per product" });
+        return;
+    }
     const schema = z.object({ url: z.string().url() });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
         return;
     }
-    const id = `pm-${Date.now()}`;
+    const id = `pm-${randomUUID()}`;
     const media = { id, productId, url: parsed.data.url };
     db.productMedia.set(id, media);
     persistProductMedia(media);
     response.status(201).json({ id });
 });
+
+app.post("/products/:id/media/upload-url", authenticate, authorizeRole(["seller"]), async (request, response) => {
+    const productId = z.string().min(1).parse(request.params.id);
+    const product = db.products.get(productId);
+    if (!product || product.sellerId !== request.authUserId) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    const schema = z.object({
+        filename: z.string().min(3).max(255),
+        assetKind: z.enum(["image", "video"])
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    if (parsed.data.assetKind === "image") {
+        const imageCount = [...db.productMedia.values()].filter((m) => m.productId === productId).length;
+        if (imageCount >= 5) {
+            response.status(400).json({ error: "Maximum of 5 images per product" });
+            return;
+        }
+    } else if (product.videoUrl) {
+        response.status(400).json({ error: "A video is already set; clear video URL first" });
+        return;
+    }
+    const kind = parsed.data.assetKind === "image" ? "product-image" : "product-video";
+    const target = await generateVerificationUploadTarget(
+        request.authUserId as string,
+        parsed.data.filename,
+        kind,
+        productId
+    );
+    response.status(201).json(target);
+});
+
+app.post(
+    "/products/:id/model-3d/upload-url",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const productId = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(productId);
+        if (!product || product.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        const schema = z.object({
+            filename: z.string().min(3).max(255).optional()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const name = parsed.data.filename?.toLowerCase().endsWith(".glb")
+            ? parsed.data.filename
+            : `${parsed.data.filename ?? "model"}.glb`;
+        const target = await generateVerificationUploadTarget(
+            request.authUserId as string,
+            name,
+            "product-3d-model",
+            productId
+        );
+        response.status(201).json(target);
+    }
+);
 
 app.delete(
     "/products/:id/media/:mediaId",
@@ -2066,7 +2249,9 @@ app.get("/recommendations", authenticate, (_request, response) => {
 
 app.get("/public/highlights", (_request, response) => {
     const publishedProducts = [...db.products.values()].filter((product) => product.isPublished);
-    const topProducts = publishedProducts.slice(0, 6);
+    const featured = publishedProducts.filter((p) => p.isFeatured);
+    const rest = publishedProducts.filter((p) => !p.isFeatured);
+    const topProducts = [...featured, ...rest].slice(0, 6);
     const sellerCounter = new Map<string, number>();
     for (const product of publishedProducts) {
         sellerCounter.set(product.sellerId, (sellerCounter.get(product.sellerId) ?? 0) + 1);
@@ -2089,6 +2274,46 @@ app.get("/public/highlights", (_request, response) => {
         topSellers
     });
 });
+
+app.post(
+    "/seller/ai/image-to-3d",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const urlBody = z.object({ imageUrl: z.string().url() });
+        const fileBody = z.object({
+            imageBase64: z.string().min(1).max(16_000_000),
+            mimeType: z.string().min(1).max(120)
+        });
+        const parsedUrl = urlBody.safeParse(request.body);
+        const parsedFile = parsedUrl.success ? null : fileBody.safeParse(request.body);
+        if (!parsedUrl.success && !parsedFile?.success) {
+            response.status(400).json({
+                error: parsedFile?.error.flatten() ?? parsedUrl.error.flatten()
+            });
+            return;
+        }
+        try {
+            let falGlbUrl: string;
+            if (parsedUrl.success) {
+                falGlbUrl = await generateGlbUrlFromImageUrl(parsedUrl.data.imageUrl);
+            } else if (parsedFile?.success) {
+                falGlbUrl = await generateGlbUrlFromImageBuffer(
+                    Buffer.from(parsedFile.data.imageBase64, "base64"),
+                    parsedFile.data.mimeType
+                );
+            } else {
+                response.status(400).json({ error: "Invalid body" });
+                return;
+            }
+            response.json({ falGlbUrl });
+        } catch (error) {
+            response.status(502).json({
+                error: error instanceof Error ? error.message : "Image to 3D generation failed"
+            });
+        }
+    }
+);
 
 app.post("/ai/fal/jobs", authenticate, (_request, response) => {
     response.status(202).json({ jobId: `fal-${Date.now()}`, status: "queued" });

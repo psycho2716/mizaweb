@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Box, Coins, Currency, CurrencyIcon, Landmark, ScanSearch } from "lucide-react";
+import { Box, Coins, ScanSearch } from "lucide-react";
 import type { LandingHighlightsResponse } from "@/types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -20,42 +20,43 @@ export default async function Home() {
     const highlights = await getHighlights();
     const featureCards = [
         {
-            title: "Verified Stone Supply",
+            title: "Curated stone goods",
             description:
-                "Source granite, marble, and specialty cuts from vetted sellers with transparent listing data.",
+                "Sculptures, kitchen and dining pieces, décor, keychains, and gifts from verified sellers—clear listings and PHP pricing.",
             icon: ScanSearch
         },
         {
-            title: "Project-Ready Pricing",
+            title: "Straightforward checkout",
             description:
-                "Compare base prices quickly and shortlist materials that fit budget, finish, and volume targets.",
+                "Add to cart, pay cash or online where offered, then track orders and chat with the seller when you need an update.",
             icon: Coins
         },
         {
-            title: "Interactive 3D Product Views",
+            title: "See pieces up close",
             description:
-                "Let customers inspect stone texture, edges, and scale with interactive 3D product previews before ordering.",
+                "Photos and optional 3D-style previews help you judge texture, finish, and scale before you buy.",
             icon: Box
         }
     ] as const;
 
     return (
-        <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-14 px-4 pb-14 pt-6 sm:px-6 lg:gap-16 lg:pt-8">
+        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-14 px-4 pb-14 pt-6 sm:px-6 lg:gap-16 lg:pt-8">
             <section className="relative overflow-hidden rounded-2xl border border-(--border) bg-(--surface)">
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(34,199,243,0.16),transparent_34%),linear-gradient(120deg,#0a1018_20%,#0f1622_55%,#141c2a_100%)]" />
                 <div className="absolute inset-0 bg-[linear-gradient(130deg,rgba(4,7,12,0.16)_30%,rgba(3,5,9,0.78)_70%)]" />
                 <div className="relative flex min-h-[420px] flex-col justify-center px-6 py-12 md:min-h-[500px] md:px-12">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-(--muted)">
-                        Stone sourcing network
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-(--accent)">
+                        Stone lifestyle marketplace
                     </p>
                     <h1 className="mt-4 max-w-xl text-5xl leading-[0.95] font-semibold tracking-tight md:text-7xl">
                         <span className="text-foreground">MIZAWEB</span>
                         <br />
-                        <span className="text-(--accent)">STONE MARKETPLACE</span>
+                        <span className="text-(--accent)">STONE GOODS</span>
                     </h1>
                     <p className="mt-5 max-w-md text-sm leading-7 text-(--muted)">
-                        Curated natural stone listings for modern builds. Find verified suppliers,
-                        compare catalog options, and move from inquiry to delivery in one platform.
+                        Shop marble and stone sculptures, kitchen pieces, décor, accessories, and
+                        gifts from Filipino artisans—browse in PHP, message sellers, and checkout in
+                        one place.
                     </p>
                     <div className="mt-8 flex flex-wrap gap-3">
                         <Link
@@ -81,7 +82,7 @@ export default async function Home() {
                             Features
                         </p>
                         <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                            Marketplace Features
+                            Why shoppers use Mizaweb
                         </h2>
                     </div>
                 </div>
@@ -112,7 +113,7 @@ export default async function Home() {
                             Chapter 02
                         </p>
                         <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                            Featured Materials
+                            Featured pieces
                         </h2>
                     </div>
                     <Link
@@ -148,7 +149,7 @@ export default async function Home() {
                                 </p>
                                 <p className="line-clamp-2 text-xs text-(--muted)">
                                     {product.description ||
-                                        "Premium cut suitable for facade, flooring, and interior accents."}
+                                        "Hand-finished stone piece from a verified seller."}
                                 </p>
                                 <p className="text-xs font-semibold text-(--accent)">
                                     PHP {product.basePrice}
@@ -166,10 +167,10 @@ export default async function Home() {
 
             <section className="grid gap-4 md:grid-cols-2">
                 <article className="rounded-sm border border-(--border) bg-(--surface) p-8">
-                    <h3 className="text-3xl font-semibold text-foreground">For Buyers</h3>
+                    <h3 className="text-3xl font-semibold text-foreground">For buyers</h3>
                     <p className="mt-3 max-w-sm text-sm leading-7 text-(--muted)">
-                        Create a sourcing shortlist, compare stone options by budget and quality,
-                        and order from verified merchants.
+                        Discover stone décor, gifts, and everyday pieces, compare prices in PHP, and
+                        order from verified sellers with order tracking and chat.
                     </p>
                     <Link
                         href="/products"
@@ -179,10 +180,10 @@ export default async function Home() {
                     </Link>
                 </article>
                 <article className="rounded-sm border border-(--border) bg-(--surface) p-8">
-                    <h3 className="text-3xl font-semibold text-foreground">For Sellers</h3>
+                    <h3 className="text-3xl font-semibold text-foreground">For sellers</h3>
                     <p className="mt-3 max-w-sm text-sm leading-7 text-(--muted)">
-                        Publish catalog items, receive buyer inquiries, and manage orders through a
-                        dedicated seller workflow.
+                        List stone goods, manage orders and payouts, and talk to buyers from one
+                        merchant workspace.
                     </p>
                     <Link
                         href="/auth/register"

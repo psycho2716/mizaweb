@@ -13,17 +13,17 @@ export function PublicFooter() {
     const appName = getAppName();
 
     return (
-        <footer className="border-t border-(--border) bg-(--surface)/80">
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
+        <footer className="mt-auto border-t border-white/[0.06] bg-[#0b0e14]/90 backdrop-blur-sm">
+            <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
                 <div className="grid gap-8 md:grid-cols-3">
                     <div className="space-y-2">
                         <p className="text-xl font-semibold tracking-wide text-foreground">
                             {appName}
                         </p>
-                        <p className="max-w-xs text-sm text-(--muted)">
-                            Curated natural stone listings for modern builds. Find verified
-                            suppliers, compare catalog options, and move from inquiry to delivery in
-                            one platform.
+                        <p className="max-w-xs text-sm leading-relaxed text-(--muted)">
+                            Hand-finished stone goods—sculptures, kitchen pieces, décor, and
+                            accessories—from verified Filipino artisans. Shop in PHP, message
+                            sellers, and checkout in one place.
                         </p>
                     </div>
 

@@ -87,10 +87,21 @@ export async function createSignedVerificationDownloadUrl(
 export async function generateVerificationUploadTarget(
   sellerId: string,
   filename: string,
-  kind: "verification" | "profile" | "background" | "payment-qr" = "verification",
+  kind:
+    | "verification"
+    | "profile"
+    | "background"
+    | "payment-qr"
+    | "product-image"
+    | "product-video"
+    | "product-3d-model" = "verification",
+  productId?: string,
 ): Promise<VerificationUploadTarget> {
   const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const path = `${sellerId}/${kind}/${Date.now()}-${safeFilename}`;
+  const path =
+    kind === "product-image" || kind === "product-video" || kind === "product-3d-model"
+      ? `${sellerId}/product-media/${productId ?? "draft"}/${kind}/${Date.now()}-${safeFilename}`
+      : `${sellerId}/${kind}/${Date.now()}-${safeFilename}`;
 
   if (!isSupabaseConfigured()) {
     return {

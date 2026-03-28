@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
     title: getAppName(),
-    description: "AI-powered stone e-commerce platform"
+    description: "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts in PHP."
 };
 
 export default function RootLayout({
@@ -30,7 +30,7 @@ export default function RootLayout({
             lang="en"
             className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
         >
-            <body className="public-shell min-h-full text-foreground" suppressHydrationWarning>
+            <body className="min-h-full text-foreground antialiased" suppressHydrationWarning>
                 <AppChrome>{children}</AppChrome>
                 <Toaster richColors />
             </body>

@@ -7,6 +7,16 @@ export interface AdminConsoleShellProps {
   activeNav?: "verifications" | "users";
 }
 
+/** Seller console sidebar / mobile tab highlight. */
+export type SellerConsoleActiveNav = "dashboard" | "products" | "orders" | "profile";
+
+export interface SellerConsoleShellProps {
+  children: ReactNode;
+  activeNav: SellerConsoleActiveNav;
+  /** Top bar context label (e.g. Stone manifest, Specimen editor). */
+  sectionTitle: string;
+}
+
 export interface AdminTablePaginationProps {
   page: number;
   totalPages: number;
@@ -43,4 +53,13 @@ export interface SellerShopMapPickerProps {
   longitude: number | undefined;
   onPositionChange: (lat: number, lng: number) => void;
   error?: string;
+}
+
+/** Read-only map for admin views of a seller’s pinned shop. */
+export interface AdminSellerLocationMapProps {
+  latitude?: number;
+  longitude?: number;
+  /** Used for “Open in Google Maps” when coordinates are missing. */
+  address?: string;
+  className?: string;
 }

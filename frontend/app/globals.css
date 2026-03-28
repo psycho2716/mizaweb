@@ -1,12 +1,13 @@
 @import "tailwindcss";
 
+/* Mizaweb / Stitch “Stone Goods” tokens — dark surface + cyan accent */
 :root {
-  --background: #080b11;
-  --foreground: #e6edf7;
-  --muted: #93a2b8;
-  --surface: #0d121b;
-  --surface-elevated: #121a25;
-  --border: #1d2a3d;
+  --background: #10131a;
+  --foreground: #e0e2eb;
+  --muted: #bcc9cf;
+  --surface: #1d2026;
+  --surface-elevated: #272a31;
+  --border: #3d494e;
   --accent: #22c7f3;
 }
 
@@ -18,14 +19,10 @@
 }
 
 body {
-  background: var(--background);
+  background-color: #070b11;
   color: var(--foreground);
   font-family: var(--font-geist-sans), Helvetica, Arial, sans-serif;
   min-height: 100vh;
-  background-image:
-    radial-gradient(circle at 80% -10%, rgb(34 199 243 / 0.17), transparent 38%),
-    radial-gradient(circle at 0% 0%, rgb(255 255 255 / 0.06), transparent 28%);
-  background-attachment: fixed;
 }
 
 html {
@@ -37,6 +34,16 @@ html {
   outline-offset: 2px;
 }
 
-.public-shell {
-  background: linear-gradient(180deg, #06090f 0%, #090d14 38%, #090b12 100%);
+/* Public marketplace + seller console (not auth/admin) */
+.mizaweb-stitch-app {
+  display: flex;
+  min-height: 100%;
+  flex: 1;
+  flex-direction: column;
+  background-color: #10131a;
+  background-image:
+    radial-gradient(circle at 82% -6%, rgb(34 199 243 / 0.13), transparent 42%),
+    radial-gradient(circle at 0% 0%, rgb(255 255 255 / 0.05), transparent 28%),
+    linear-gradient(180deg, #0b0e14 0%, #10131a 38%, #10131a 100%);
+  background-attachment: fixed;
 }

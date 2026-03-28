@@ -123,6 +123,10 @@ interface ProductRow {
     base_price: number;
     is_published: boolean;
     model_3d_url: string | null;
+    made_to_order?: boolean | null;
+    stock_quantity?: number | null;
+    is_featured?: boolean | null;
+    video_url?: string | null;
 }
 
 interface ProductMediaRow {
@@ -278,6 +282,7 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
     if (productRes.data) {
         db.products.clear();
         for (const row of productRes.data as ProductRow[]) {
+            const madeToOrder = row.made_to_order === true;
             db.products.set(row.id, {
                 id: row.id,
                 sellerId: row.seller_id,
@@ -285,7 +290,11 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 description: row.description,
                 basePrice: Number(row.base_price),
                 isPublished: row.is_published,
-                ...(row.model_3d_url ? { model3dUrl: row.model_3d_url } : {})
+                madeToOrder,
+                isFeatured: row.is_featured === true,
+                ...(row.model_3d_url ? { model3dUrl: row.model_3d_url } : {}),
+                ...(!madeToOrder ? { stockQuantity: Number(row.stock_quantity ?? 0) } : {}),
+                ...(row.video_url ? { videoUrl: row.video_url } : {})
             });
         }
     }
@@ -509,7 +518,12 @@ export function persistProduct(row: ProductRecord): void {
             description: row.description,
             base_price: row.basePrice,
             is_published: row.isPublished,
-            model_3d_url: row.model3dUrl ?? null
+            model_3d_url: row.model3dUrl ?? null,
+            made_to_order: row.madeToOrder,
+            stock_quantity:
+                row.madeToOrder ? null : (row.stockQuantity ?? null),
+            is_featured: row.isFeatured,
+            video_url: row.videoUrl ?? null
         },
         { onConflict: "id" }
     );
@@ -561,6 +575,12 @@ export function deleteCustomizationOptionsByProduct(productId: string): void {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
     void supabase.from("app_customization_options").delete().eq("product_id", productId);
+}
+
+export function deleteCustomizationOptionById(optionId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_customization_options").delete().eq("id", optionId);
 }
 
 export function deleteCustomizationRulesByProduct(productId: string): void {

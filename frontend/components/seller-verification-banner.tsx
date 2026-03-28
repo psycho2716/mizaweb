@@ -97,7 +97,7 @@ export function SellerVerificationBanner() {
 
     if (phase === "loading") {
         return (
-            <div className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-center text-xs text-zinc-600">
+            <div className="border-b border-(--border) bg-(--surface) px-4 py-2 text-center text-xs text-(--muted)">
                 Checking verification status…
             </div>
         );
@@ -110,11 +110,11 @@ export function SellerVerificationBanner() {
     if (phase === "error") {
         return (
             <div
-                className="border-b border-red-200 bg-red-50/80 px-4 py-3"
+                className="border-b border-red-500/35 bg-red-950/40 px-4 py-3"
                 role="alert"
             >
                 <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-sm text-red-900">
+                    <div className="flex items-center gap-2 text-sm text-red-100">
                         <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
                         <span>Could not load verification status.</span>
                     </div>
@@ -122,7 +122,7 @@ export function SellerVerificationBanner() {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="border-red-300 bg-white"
+                        className="border-red-500/40 bg-(--surface) text-red-100 hover:bg-red-950/50"
                         onClick={() => load()}
                     >
                         <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
@@ -136,16 +136,16 @@ export function SellerVerificationBanner() {
     if (phase === "pending") {
         return (
             <div
-                className="border-b border-amber-200 bg-amber-50/90 px-4 py-3"
+                className="border-b border-amber-500/30 bg-amber-950/25 px-4 py-3"
                 role="status"
             >
                 <div className="mx-auto flex max-w-6xl items-start gap-3">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-900">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-200">
                         <Clock className="h-5 w-5" aria-hidden />
                     </span>
-                    <div className="min-w-0 flex-1 space-y-1 text-sm text-amber-950">
+                    <div className="min-w-0 flex-1 space-y-1 text-sm text-amber-100">
                         <p className="font-semibold">Verification pending</p>
-                        <p className="text-amber-950/90">
+                        <p className="text-amber-100/90">
                             Your business permit is being reviewed. You cannot publish listings until
                             an administrator approves your account.
                         </p>
@@ -157,11 +157,11 @@ export function SellerVerificationBanner() {
 
     if (phase === "rejected") {
         return (
-            <div className="border-b border-red-200 bg-red-50/90 px-4 py-4" role="alert">
+            <div className="border-b border-red-500/35 bg-red-950/35 px-4 py-4" role="alert">
                 <div className="mx-auto grid max-w-6xl gap-4">
                     <div className="flex items-start gap-3">
-                        <XCircle className="h-6 w-6 shrink-0 text-red-700" aria-hidden />
-                        <div className="min-w-0 space-y-1 text-sm text-red-950">
+                        <XCircle className="h-6 w-6 shrink-0 text-red-300" aria-hidden />
+                        <div className="min-w-0 space-y-1 text-sm text-red-50">
                             <p className="font-semibold">Verification not approved</p>
                             {rejectionReason ? (
                                 <p>
@@ -171,7 +171,7 @@ export function SellerVerificationBanner() {
                             ) : (
                                 <p>Please submit a new legal business document for review.</p>
                             )}
-                            <p className="text-red-900/90">
+                            <p className="text-red-100/85">
                                 Upload a clear PDF or image of your business permit below.
                             </p>
                         </div>
@@ -200,7 +200,7 @@ export function SellerVerificationBanner() {
                             type="button"
                             disabled={submitting}
                             onClick={() => void handleSubmitResubmit(true)}
-                            className="w-fit bg-red-900 hover:bg-red-800"
+                            className="w-fit bg-red-600 text-white hover:bg-red-500"
                         >
                             {submitting ? "Submitting…" : "Submit new document"}
                         </Button>
@@ -212,11 +212,11 @@ export function SellerVerificationBanner() {
 
     /* unsubmitted */
     return (
-        <div className="border-b border-amber-200 bg-amber-50/90 px-4 py-4" role="status">
+        <div className="border-b border-amber-500/30 bg-amber-950/25 px-4 py-4" role="status">
             <div className="mx-auto grid max-w-6xl gap-4">
                 <div className="flex items-start gap-3">
-                    <AlertCircle className="h-6 w-6 shrink-0 text-amber-800" aria-hidden />
-                    <div className="min-w-0 space-y-1 text-sm text-amber-950">
+                    <AlertCircle className="h-6 w-6 shrink-0 text-amber-200" aria-hidden />
+                    <div className="min-w-0 space-y-1 text-sm text-amber-100">
                         <p className="font-semibold">Verification required</p>
                         <p>
                             Submit a legal business permit (PDF or image) to sell on this marketplace.

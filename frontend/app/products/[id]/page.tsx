@@ -11,13 +11,21 @@ export default async function ProductDetailPage({
   const { id } = await params;
   const response = await fetch(`${BACKEND_URL}/products/${id}`, { cache: "no-store" });
   if (!response.ok) {
-    return <main className="p-6">Product not found.</main>;
+    return (
+      <main className="flex flex-1 items-center justify-center p-6">
+        <p className="text-(--muted)">Product not found.</p>
+      </main>
+    );
   }
   const payload = (await response.json()) as ProductDetailResponse;
   const product = payload.data;
 
   if (!product) {
-    return <main className="p-6">Product not found.</main>;
+    return (
+      <main className="flex flex-1 items-center justify-center p-6">
+        <p className="text-(--muted)">Product not found.</p>
+      </main>
+    );
   }
 
   return <ProductDetailClient product={product} />;

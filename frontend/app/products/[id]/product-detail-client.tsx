@@ -9,6 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { addCartItem, checkoutCart } from "@/lib/api/endpoints";
 import type { ProductDetail } from "@/types";
 
+const fieldClass =
+  "h-10 w-full rounded-md border border-(--border) bg-[#080b10] px-3 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/25";
+
 interface ProductDetailClientProps {
   product: ProductDetail;
 }
@@ -60,17 +63,22 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
   }
 
   return (
-    <main className="mx-auto grid max-w-6xl gap-6 p-6 md:grid-cols-2">
+    <main className="mx-auto grid max-w-6xl flex-1 gap-6 px-4 py-8 sm:px-6 md:grid-cols-2 lg:py-10">
       <Card>
         <CardHeader>
-          <CardTitle>Product Images</CardTitle>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">Gallery</p>
+          <CardTitle className="mt-1">Product images</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="h-72 rounded-md border border-zinc-200 bg-zinc-100">
+          <div className="h-72 overflow-hidden rounded-lg border border-(--border) bg-[#080b10] ring-1 ring-white/[0.04]">
             {selectedImage ? (
-              <img src={selectedImage} alt={product.title} className="h-full w-full rounded-md object-cover" />
+              <img
+                src={selectedImage}
+                alt={product.title}
+                className="h-full w-full object-cover"
+              />
             ) : (
-              <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+              <div className="flex h-full items-center justify-center text-sm text-(--muted)">
                 No image available
               </div>
             )}
@@ -81,7 +89,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                 key={image.id}
                 type="button"
                 onClick={() => setSelectedImage(image.url)}
-                className="rounded border border-zinc-200 bg-white p-1"
+                className="rounded-md border border-(--border) bg-[#080b10] p-1 ring-1 ring-white/[0.04] transition-colors hover:border-(--accent)/40"
               >
                 <img src={image.url} alt={product.title} className="h-14 w-full rounded object-cover" />
               </button>
@@ -96,24 +104,31 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
             <CardTitle>{product.title}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <p className="text-zinc-700">{product.description}</p>
-            <p className="text-base font-semibold">PHP {product.basePrice}</p>
-            <Link href={`/sellers/${product.sellerId}`} className="text-sm underline">
-              View seller profile
+            <p className="leading-relaxed text-(--muted)">{product.description}</p>
+            <p className="text-xl font-semibold tabular-nums text-(--accent)">
+              PHP {product.basePrice.toLocaleString()}
+            </p>
+            <Link
+              href={`/sellers/${product.sellerId}`}
+              className="inline-flex text-sm font-semibold text-(--accent) underline-offset-4 hover:underline"
+            >
+              View seller storefront →
             </Link>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Customize specs</CardTitle>
+            <CardTitle>Options</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {product.options.map((option) => (
               <label key={option.id} className="block text-sm">
-                <span className="mb-1 block text-zinc-700">{option.name}</span>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                  {option.name}
+                </span>
                 <select
-                  className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                  className={fieldClass}
                   value={selectedSpecs[option.id] ?? ""}
                   onChange={(event) =>
                     setSelectedSpecs((previous) => ({ ...previous, [option.id]: event.target.value }))
@@ -129,13 +144,15 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
               </label>
             ))}
             <label className="block text-sm">
-              <span className="mb-1 block text-zinc-700">Quantity</span>
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                Quantity
+              </span>
               <input
                 type="number"
                 min={1}
                 value={quantity}
                 onChange={(event) => setQuantity(Number(event.target.value))}
-                className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                className={fieldClass}
               />
             </label>
           </CardContent>
@@ -144,17 +161,19 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
         {has3D ? (
           <Card>
             <CardHeader>
-              <CardTitle>3D Model Preview</CardTitle>
+              <CardTitle>3D preview</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50 p-3 text-zinc-600">
+              <div className="rounded-lg border border-dashed border-(--border) bg-[#080b10] p-3 text-(--muted)">
                 Interactive 3D area placeholder (color, dimensions, texture controls).
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label>
-                  <span className="mb-1 block text-zinc-700">Color</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                    Color
+                  </span>
                   <select
-                    className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                    className={fieldClass}
                     value={threeDColor}
                     onChange={(event) => setThreeDColor(event.target.value)}
                   >
@@ -164,9 +183,11 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                   </select>
                 </label>
                 <label>
-                  <span className="mb-1 block text-zinc-700">Texture</span>
+                  <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                    Texture
+                  </span>
                   <select
-                    className="h-10 w-full rounded-md border border-zinc-300 bg-white px-3"
+                    className={fieldClass}
                     value={threeDTexture}
                     onChange={(event) => setThreeDTexture(event.target.value)}
                   >
@@ -180,7 +201,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
           </Card>
         ) : null}
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3 pt-1">
           <Button type="button" onClick={() => void handleAddToCart()} disabled={isSubmitting}>
             Add to cart
           </Button>

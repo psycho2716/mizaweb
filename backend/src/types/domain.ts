@@ -41,6 +41,13 @@ export interface ProductRecord {
     basePrice: number;
     isPublished: boolean;
     model3dUrl?: string;
+    /** When true, item is produced to order; stock_quantity is ignored. */
+    madeToOrder: boolean;
+    /** Units available when not made-to-order. */
+    stockQuantity?: number;
+    isFeatured: boolean;
+    /** Single marketing / demo video URL. */
+    videoUrl?: string;
 }
 
 export interface VerificationSubmission {

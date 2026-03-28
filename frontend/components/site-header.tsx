@@ -130,12 +130,15 @@ export function SiteHeader() {
     const showCart = user?.role !== "seller" && user?.role !== "admin";
 
     return (
-        <header className="sticky top-0 z-50 border-b border-(--border) bg-[#070b12]/92 text-foreground backdrop-blur">
+        <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#10131a]/88 text-foreground backdrop-blur-xl backdrop-saturate-150">
             <nav
-                className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6"
+                className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3.5 sm:px-6"
                 aria-label="Main"
             >
-                <Link href="/" className="text-base font-semibold tracking-wide text-foreground">
+                <Link
+                    href="/"
+                    className="text-[11px] font-bold uppercase tracking-[0.28em] text-foreground"
+                >
                     {appName}
                 </Link>
                 <div className="flex flex-wrap items-center justify-end gap-x-1 gap-y-2 sm:gap-x-2">

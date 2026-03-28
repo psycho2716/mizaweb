@@ -12,7 +12,7 @@ export function EmptyState({ title, description }: EmptyStateProps) {
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
       </CardHeader>
-      <CardContent className="text-sm text-zinc-500">Try again later.</CardContent>
+      <CardContent className="text-sm text-(--muted)">Try again later.</CardContent>
     </Card>
   );
 }
