@@ -545,18 +545,31 @@ export function deleteProduct(productId: string): void {
     void supabase.from("app_products").delete().eq("id", productId);
 }
 
-export function persistProductMedia(row: ProductMedia): void {
+export async function persistProductMedia(row: ProductMedia): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase
-        .from("app_product_media")
-        .upsert({ id: row.id, product_id: row.productId, url: row.url }, { onConflict: "id" });
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_product_media").upsert(
+        { id: row.id, product_id: row.productId, url: row.url },
+        { onConflict: "id" }
+    );
+    if (error) {
+        console.error("[persistProductMedia]", error.message);
+        throw new Error(`Failed to persist product media: ${error.message}`);
+    }
 }
 
-export function deleteProductMedia(mediaId: string): void {
+export async function deleteProductMedia(mediaId: string): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_product_media").delete().eq("id", mediaId);
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_product_media").delete().eq("id", mediaId);
+    if (error) {
+        console.error("[deleteProductMedia]", error.message);
+        throw new Error(`Failed to delete product media: ${error.message}`);
+    }
 }
 
 export async function persistCustomizationOption(row: CustomizationOption): Promise<void> {
@@ -611,10 +624,16 @@ export function deleteCustomizationRulesByProduct(productId: string): void {
     void supabase.from("app_customization_rules").delete().eq("product_id", productId);
 }
 
-export function deleteProductMediaByProduct(productId: string): void {
+export async function deleteProductMediaByProduct(productId: string): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_product_media").delete().eq("product_id", productId);
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_product_media").delete().eq("product_id", productId);
+    if (error) {
+        console.error("[deleteProductMediaByProduct]", error.message);
+        throw new Error(`Failed to delete product media: ${error.message}`);
+    }
 }
 
 export function persistCartItem(row: CartItem): void {

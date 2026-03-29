@@ -7,26 +7,26 @@ import { setRealtimeServer } from "./lib/realtime";
 
 const server = createServer(app);
 const io = new SocketServer(server, {
-  cors: {
-    origin: env.FRONTEND_URL,
-    credentials: true,
-  },
+    cors: {
+        origin: env.FRONTEND_URL,
+        credentials: true
+    }
 });
 
 io.on("connection", (socket) => {
-  socket.on("join:channel", (channel: string) => {
-    socket.join(channel);
-  });
+    socket.on("join:channel", (channel: string) => {
+        socket.join(channel);
+    });
 });
 
 setRealtimeServer(io);
 
 async function startServer(): Promise<void> {
-  await initializePersistence();
-  server.listen(env.PORT, () => {
-    // eslint-disable-next-line no-console
-    console.log(`API running at http://localhost:${env.PORT}`);
-  });
+    await initializePersistence();
+    server.listen(env.PORT, () => {
+        // eslint-disable-next-line no-console
+        console.log(`API running at http://localhost:${env.PORT}`);
+    });
 }
 
 void startServer();

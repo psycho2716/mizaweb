@@ -1,6 +1,25 @@
 import { fal } from "@fal-ai/client";
 import { env } from "../config/env";
 
+/** Thrown before Trellis runs so 3D generation is not billed when content is flagged. */
+export class NsfwContentRejectedError extends Error {
+    readonly code = "NSFW_REJECTED" as const;
+    constructor(
+        readonly nsfwProbability: number,
+        message?: string
+    ) {
+        super(
+            message ??
+                "This image was flagged by an automated safety check (e.g. adult or sensitive content). Use a clear photo of a product or object instead. 3D generation was not started."
+        );
+        this.name = "NsfwContentRejectedError";
+    }
+}
+
+export function isNsfwContentRejectedError(e: unknown): e is NsfwContentRejectedError {
+    return e instanceof NsfwContentRejectedError;
+}
+
 function configureFal(): void {
     const key = env.FAL_API_KEY;
     if (!key) {
@@ -12,6 +31,30 @@ function configureFal(): void {
 type Trellis2Output = {
     model_glb?: { url?: string };
 };
+
+type NsfwFilterOutput = {
+    nsfw_probability?: number;
+};
+
+/**
+ * Cheap fal-ai/imageutils/nsfw pass; must run before Trellis to avoid 3D API cost on blocked images.
+ */
+async function assertImagePassesNsfwGate(imageUrl: string): Promise<void> {
+    if (env.FAL_SKIP_NSFW_GATE === "1") {
+        return;
+    }
+    const result = await fal.subscribe("fal-ai/imageutils/nsfw", {
+        input: { image_url: imageUrl }
+    });
+    const data = result.data as NsfwFilterOutput | undefined;
+    const p = data?.nsfw_probability;
+    if (typeof p !== "number" || Number.isNaN(p)) {
+        throw new Error("Content safety check did not return a score; try again or use another image.");
+    }
+    if (p >= env.FAL_NSFW_THRESHOLD) {
+        throw new NsfwContentRejectedError(p);
+    }
+}
 
 /**
  * Fal Trellis 2 — image → textured GLB. Quality-first preset: higher internal resolution, denser
@@ -50,6 +93,7 @@ async function runTrellis2(imageUrl: string): Promise<string> {
  */
 export async function generateGlbUrlFromImageUrl(imageUrl: string): Promise<string> {
     configureFal();
+    await assertImagePassesNsfwGate(imageUrl);
     return runTrellis2(imageUrl);
 }
 
@@ -70,5 +114,6 @@ export async function generateGlbUrlFromImageBuffer(
     configureFal();
     const blob = new Blob([new Uint8Array(imageBuffer)], { type: normalized });
     const hostedImageUrl = await fal.storage.upload(blob);
+    await assertImagePassesNsfwGate(hostedImageUrl);
     return runTrellis2(hostedImageUrl);
 }

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ApiRequestError } from "@/lib/api/client";
 import {
     addProductMedia,
     createProduct,
@@ -62,7 +63,9 @@ type CreateVideoEntry = { file: File; preview: string };
 
 type EditImageEntry =
     | { kind: "server"; key: string; mediaId: string; url: string }
-    | { kind: "local"; key: string; file: File; preview: string };
+    | { kind: "local"; key: string; file: File; preview: string }
+    /** Image URL wrongly stored on `videoUrl` (no `app_product_media` row) — show in images; migrate on save. */
+    | { kind: "video_field_image"; key: string; url: string };
 
 type EditVideoEntry =
     | { kind: "server"; url: string; preview: string }
@@ -102,6 +105,54 @@ function parseLines(text: string | undefined): string[] {
         .filter(Boolean);
 }
 
+/** True when URL path looks like a raster image (not typical video extensions). */
+function isLikelyRasterImageUrl(url: string): boolean {
+    try {
+        const pathname = new URL(url).pathname.toLowerCase();
+        return /\.(jpe?g|png|webp|gif|bmp|avif)(\?|#|$)/i.test(pathname);
+    } catch {
+        return false;
+    }
+}
+
+function isLikelyVideoFileUrl(url: string): boolean {
+    try {
+        const pathname = new URL(url).pathname.toLowerCase();
+        return /\.(mp4|webm|mov|m4v|ogg|ogv|avi|mkv)(\?|#|$)/i.test(pathname);
+    } catch {
+        return false;
+    }
+}
+
+function toastImageTo3dFailure(error: unknown): void {
+    if (error instanceof ApiRequestError && error.code === "NSFW_REJECTED") {
+        toast.error("This photo can’t be turned into a 3D model", {
+            description:
+                "It didn’t pass our content safety check (for example adult or sensitive imagery). Use a clear, neutral product or object photo instead. You were not charged for 3D generation."
+        });
+        return;
+    }
+    if (error instanceof ApiRequestError && error.status === 422) {
+        toast.error("3D generation wasn’t allowed", {
+            description: error.message
+        });
+        return;
+    }
+    if (error instanceof Error) {
+        const m = error.message;
+        if (m === "Failed to fetch" || m.toLowerCase().includes("failed to fetch")) {
+            toast.error("Couldn’t reach the server", {
+                description:
+                    "Check your connection and that the backend is running, then try again."
+            });
+            return;
+        }
+        toast.error(m);
+        return;
+    }
+    toast.error("3D generation failed");
+}
+
 function productDetailToFormValues(detail: ProductDetail): SellerProductFormValues {
     return {
         title: detail.title,
@@ -131,14 +182,16 @@ function buildCreatePayload(values: SellerProductFormValues): SellerProductCreat
 
 function buildPatchPayload(
     values: SellerProductFormValues,
-    videoUrl: string,
-    model3dUrl: string
+    opts: { videoUrl?: string; model3dUrl?: string }
 ): SellerProductPatchInput {
-    return {
-        ...buildCreatePayload(values),
-        videoUrl,
-        model3dUrl
-    };
+    const payload: SellerProductPatchInput = { ...buildCreatePayload(values) };
+    if (opts.videoUrl !== undefined) {
+        payload.videoUrl = opts.videoUrl;
+    }
+    if (opts.model3dUrl !== undefined) {
+        payload.model3dUrl = opts.model3dUrl;
+    }
+    return payload;
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -256,32 +309,32 @@ function MediaAddTile({
 }) {
     return (
         <div className="shrink-0 p-1.5">
-        <button
-            type="button"
-            disabled={disabled}
-            onClick={onClick}
-            aria-label={ariaLabel}
-            className={cn(
-                "group flex aspect-square w-[104px] flex-col items-center justify-center gap-1.5 rounded-md transition-all duration-200",
-                "border-2 border-dashed border-(--accent)/45 bg-(--accent)/[0.07] text-(--accent)",
-                "hover:border-(--accent)/80 hover:bg-(--accent)/[0.14] hover:shadow-[0_0_24px_-8px_var(--accent)]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e14]",
-                "disabled:pointer-events-none disabled:opacity-40"
-            )}
-        >
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-(--accent)/20 text-(--accent) shadow-inner ring-1 ring-(--accent)/25 transition-all group-hover:scale-105 group-hover:bg-(--accent)/30 group-hover:ring-(--accent)/40">
-                {kind === "video" ? (
-                    <Video className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-                ) : kind === "source" ? (
-                    <ScanLine className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-                ) : (
-                    <ImagePlus className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+            <button
+                type="button"
+                disabled={disabled}
+                onClick={onClick}
+                aria-label={ariaLabel}
+                className={cn(
+                    "group flex aspect-square w-[104px] flex-col items-center justify-center gap-1.5 rounded-md transition-all duration-200",
+                    "border-2 border-dashed border-(--accent)/45 bg-(--accent)/[0.07] text-(--accent)",
+                    "hover:border-(--accent)/80 hover:bg-(--accent)/[0.14] hover:shadow-[0_0_24px_-8px_var(--accent)]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0e14]",
+                    "disabled:pointer-events-none disabled:opacity-40"
                 )}
-            </span>
-            <span className="max-w-[92px] text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-(--accent)/95">
-                {label}
-            </span>
-        </button>
+            >
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-(--accent)/20 text-(--accent) shadow-inner ring-1 ring-(--accent)/25 transition-all group-hover:scale-105 group-hover:bg-(--accent)/30 group-hover:ring-(--accent)/40">
+                    {kind === "video" ? (
+                        <Video className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+                    ) : kind === "source" ? (
+                        <ScanLine className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+                    ) : (
+                        <ImagePlus className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+                    )}
+                </span>
+                <span className="max-w-[92px] text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-(--accent)/95">
+                    {label}
+                </span>
+            </button>
         </div>
     );
 }
@@ -553,7 +606,6 @@ export default function SellerListingsPage() {
     const [showCreatePanel, setShowCreatePanel] = useState(false);
     const [generating3dCreate, setGenerating3dCreate] = useState(false);
     const [generating3dEdit, setGenerating3dEdit] = useState(false);
-    const [mediaBusy, setMediaBusy] = useState(false);
     const [createImages, setCreateImages] = useState<CreateImageEntry[]>([]);
     const [createVideo, setCreateVideo] = useState<CreateVideoEntry | null>(null);
     const [editImages, setEditImages] = useState<EditImageEntry[]>([]);
@@ -656,17 +708,43 @@ export default function SellerListingsPage() {
                 prev.forEach((e) => {
                     if (e.kind === "local") URL.revokeObjectURL(e.preview);
                 });
-                return detail.media.map((m) => ({
+                const fromMedia: EditImageEntry[] = detail.media.map((m) => ({
                     kind: "server" as const,
                     key: m.id,
                     mediaId: m.id,
                     url: m.url
                 }));
+                const vRaw = detail.videoUrl?.trim() ?? "";
+                const videoLooksLikeImage =
+                    vRaw.length > 0 &&
+                    (isLikelyRasterImageUrl(vRaw) ||
+                        (!isLikelyVideoFileUrl(vRaw) && !vRaw.toLowerCase().includes(".m3u8")));
+                if (fromMedia.length === 0 && vRaw.length > 0 && videoLooksLikeImage) {
+                    return [
+                        ...fromMedia,
+                        {
+                            kind: "video_field_image" as const,
+                            key: `video-field-${detail.id}`,
+                            url: vRaw
+                        }
+                    ];
+                }
+                return fromMedia;
             });
             setEditVideo((prev) => {
                 if (prev?.kind === "local") URL.revokeObjectURL(prev.preview);
-                const v = detail.videoUrl;
-                return v ? { kind: "server" as const, url: v, preview: v } : null;
+                const vRaw = detail.videoUrl?.trim() ?? "";
+                const hideVideoSlot =
+                    vRaw.length > 0 &&
+                    detail.media.length === 0 &&
+                    (isLikelyRasterImageUrl(vRaw) ||
+                        (!isLikelyVideoFileUrl(vRaw) && !vRaw.toLowerCase().includes(".m3u8")));
+                if (hideVideoSlot) {
+                    return null;
+                }
+                return vRaw.length > 0
+                    ? { kind: "server" as const, url: vRaw, preview: vRaw }
+                    : null;
             });
             setEdit3dSource((prev) => {
                 if (prev) URL.revokeObjectURL(prev.preview);
@@ -847,40 +925,18 @@ export default function SellerListingsPage() {
         });
     }
 
-    async function removeEditServerImage(mediaId: string) {
-        if (!selected) return;
-        setMediaBusy(true);
-        try {
-            await deleteProductMedia(selected.id, mediaId);
-            setEditImages((prev) =>
-                prev.filter((e) => e.kind !== "server" || e.mediaId !== mediaId)
-            );
-            setSelected((s) =>
-                s ? { ...s, media: s.media.filter((m) => m.id !== mediaId) } : null
-            );
-            await loadProducts();
-            toast.success("Image removed.");
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Remove failed");
-        } finally {
-            setMediaBusy(false);
-        }
+    function removeEditServerImage(mediaId: string) {
+        setEditImages((prev) =>
+            prev.filter((e) => e.kind !== "server" || e.mediaId !== mediaId)
+        );
     }
 
-    async function removeEditServerVideo() {
-        if (!selected) return;
-        setMediaBusy(true);
-        try {
-            await updateProduct(selected.id, { videoUrl: "" });
-            setEditVideo(null);
-            setSelected((s) => (s ? { ...s, videoUrl: undefined } : null));
-            await loadProducts();
-            toast.success("Video removed.");
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Remove failed");
-        } finally {
-            setMediaBusy(false);
-        }
+    function removeEditServerVideo() {
+        setEditVideo(null);
+    }
+
+    function removeEditVideoFieldImage() {
+        setEditImages((prev) => prev.filter((e) => e.kind !== "video_field_image"));
     }
 
     function onEditVideoPicked(file: File | null) {
@@ -991,7 +1047,7 @@ export default function SellerListingsPage() {
                 "3D model ready — it uploads to your bucket when you create the listing."
             );
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Generation failed");
+            toastImageTo3dFailure(error);
         } finally {
             setGenerating3dCreate(false);
         }
@@ -1017,9 +1073,11 @@ export default function SellerListingsPage() {
                 if (prev) URL.revokeObjectURL(prev.previewUrl);
                 return { blob, previewUrl: URL.createObjectURL(blob) };
             });
-            toast.success("3D model ready — it uploads when you update or publish.");
+            toast.success(
+                "3D model ready — it uploads when you save changes or publish from the table."
+            );
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Generation failed");
+            toastImageTo3dFailure(error);
         } finally {
             setGenerating3dEdit(false);
         }
@@ -1064,66 +1122,66 @@ export default function SellerListingsPage() {
         }
     }
 
-    async function handleEditSubmit(
-        values: SellerProductFormValues,
-        opts?: { publishAfter?: boolean }
-    ) {
+    async function handleEditSubmit(values: SellerProductFormValues) {
         if (!selected) return;
         const productId = selected.id;
-        const shouldPublish = opts?.publishAfter === true;
         try {
-            let videoUrlForPatch = "";
-            if (editVideo?.kind === "server") {
-                videoUrlForPatch = editVideo.url;
-            } else if (editVideo?.kind === "local") {
-                if (selected.videoUrl) {
-                    await updateProduct(productId, { videoUrl: "" });
+            const hadVideoFieldImage = editImages.some((e) => e.kind === "video_field_image");
+
+            const remainingServerMediaIds = new Set(
+                editImages
+                    .filter((e): e is Extract<EditImageEntry, { kind: "server" }> => e.kind === "server")
+                    .map((e) => e.mediaId)
+            );
+            for (const m of selected.media) {
+                if (!remainingServerMediaIds.has(m.id)) {
+                    await deleteProductMedia(productId, m.id);
                 }
-                videoUrlForPatch = await uploadProductVideoFile(productId, editVideo.file);
             }
 
             for (const entry of editImages) {
-                if (entry.kind === "local") {
+                if (entry.kind === "video_field_image") {
+                    await addProductMedia(productId, entry.url);
+                } else if (entry.kind === "local") {
                     await uploadProductImageFile(productId, entry.file);
                 }
             }
 
-            let model3dUrlForPatch = (selected.model3dUrl ?? "").trim();
+            let videoUrlForPatch: string | undefined;
+            if (editVideo?.kind === "local") {
+                if (selected.videoUrl) {
+                    await updateProduct(productId, { videoUrl: "" });
+                }
+                videoUrlForPatch = await uploadProductVideoFile(productId, editVideo.file);
+            } else if (editVideo?.kind === "server") {
+                videoUrlForPatch = editVideo.url;
+            } else if (hadVideoFieldImage) {
+                videoUrlForPatch = "";
+            } else if (selected.videoUrl?.trim()) {
+                videoUrlForPatch = "";
+            } else {
+                videoUrlForPatch = undefined;
+            }
+
+            let model3dUrlForPatch: string | undefined;
             if (edit3dGlb) {
                 model3dUrlForPatch = await uploadProductModel3dBlob(productId, edit3dGlb.blob);
+            } else {
+                const m = (selected.model3dUrl ?? "").trim();
+                model3dUrlForPatch = m.length > 0 ? m : undefined;
             }
 
             await updateProduct(
                 productId,
-                buildPatchPayload(values, videoUrlForPatch, model3dUrlForPatch)
+                buildPatchPayload(values, {
+                    videoUrl: videoUrlForPatch,
+                    model3dUrl: model3dUrlForPatch
+                })
             );
 
-            if (shouldPublish) {
-                await publishProduct(productId);
-            }
-
-            setEditImages((prev) => {
-                prev.forEach((e) => {
-                    if (e.kind === "local") URL.revokeObjectURL(e.preview);
-                });
-                return [];
-            });
-            setEditVideo((prev) => {
-                if (prev?.kind === "local") URL.revokeObjectURL(prev.preview);
-                return null;
-            });
-            setEdit3dSource((prev) => {
-                if (prev) URL.revokeObjectURL(prev.preview);
-                return null;
-            });
-            setEdit3dGlb((prev) => {
-                if (prev) URL.revokeObjectURL(prev.previewUrl);
-                return null;
-            });
-
-            await openProductForEdit(productId);
             await loadProducts();
-            toast.success(shouldPublish ? "Listing published." : "Listing updated.");
+            closeEditPanel();
+            toast.success("Changes saved.");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Update failed");
         }
@@ -1227,242 +1285,232 @@ export default function SellerListingsPage() {
                 title="New product"
                 description="Create a draft listing. You can publish from the table or after editing."
             >
-                    <form
-                        className="grid gap-4 sm:grid-cols-2"
-                        onSubmit={createForm.handleSubmit(handleCreate)}
-                    >
-                        <ProductFormFields
-                            register={createForm.register}
-                            control={createForm.control}
-                            errors={createForm.formState.errors}
-                            idPrefix="create"
-                            showStock={!createMadeToOrder}
-                            mediaSection={
-                                <>
-                                    <div className="grid gap-2">
-                                        <Label className="text-(--muted)">
-                                            Product images (max 5)
-                                        </Label>
-                                        <div className="flex flex-wrap items-end gap-3">
-                                            {createImages.map((img) => (
-                                                <MediaThumb
-                                                    key={img.key}
-                                                    previewUrl={img.preview}
-                                                    disabled={createForm.formState.isSubmitting}
-                                                    removeLabel="Remove image"
-                                                    onRemove={() => removeCreateImage(img.key)}
-                                                />
-                                            ))}
-                                            {createImages.length < 5 ? (
-                                                <>
-                                                    <input
-                                                        ref={createImageInputRef}
-                                                        type="file"
-                                                        accept="image/*"
-                                                        multiple
-                                                        className="hidden"
-                                                        onChange={(e) => {
-                                                            onCreateImagesPicked(e.target.files);
-                                                            e.target.value = "";
-                                                        }}
-                                                    />
-                                                    <MediaAddTile
-                                                        kind="image"
-                                                        label="Add photos"
-                                                        ariaLabel="Add product images"
-                                                        disabled={createForm.formState.isSubmitting}
-                                                        onClick={() =>
-                                                            createImageInputRef.current?.click()
-                                                        }
-                                                    />
-                                                </>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label className="text-(--muted)">
-                                            Product video (optional, one file)
-                                        </Label>
-                                        <div className="flex flex-wrap items-end gap-3">
-                                            {createVideo ? (
-                                                <MediaThumb
-                                                    video
-                                                    previewUrl={createVideo.preview}
-                                                    disabled={createForm.formState.isSubmitting}
-                                                    removeLabel="Remove video"
-                                                    onRemove={removeCreateVideo}
-                                                />
-                                            ) : null}
-                                            {!createVideo ? (
-                                                <>
-                                                    <input
-                                                        ref={createVideoInputRef}
-                                                        type="file"
-                                                        accept="video/*"
-                                                        className="hidden"
-                                                        onChange={(e) => {
-                                                            onCreateVideoPicked(
-                                                                e.target.files?.[0] ?? null
-                                                            );
-                                                            e.target.value = "";
-                                                        }}
-                                                    />
-                                                    <MediaAddTile
-                                                        kind="video"
-                                                        label="Add video"
-                                                        ariaLabel="Add product video"
-                                                        disabled={createForm.formState.isSubmitting}
-                                                        onClick={() =>
-                                                            createVideoInputRef.current?.click()
-                                                        }
-                                                    />
-                                                </>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                </>
-                            }
-                            threeDSection={
-                                <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
-                                    <div>
-                                        <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
-                                            3D model (Fal AI)
-                                        </p>
-                                        <p className="mt-1 text-xs text-(--muted)">
-                                            Upload a clear, well-lit 2D photo. Wait for generation
-                                            to finish before creating the listing.
-                                        </p>
-                                    </div>
+                <form
+                    className="grid gap-4 sm:grid-cols-2"
+                    onSubmit={createForm.handleSubmit(handleCreate)}
+                >
+                    <ProductFormFields
+                        register={createForm.register}
+                        control={createForm.control}
+                        errors={createForm.formState.errors}
+                        idPrefix="create"
+                        showStock={!createMadeToOrder}
+                        mediaSection={
+                            <>
+                                <div className="grid gap-2">
+                                    <Label className="text-(--muted)">Product images (max 5)</Label>
                                     <div className="flex flex-wrap items-end gap-3">
-                                        {create3dSource ? (
+                                        {createImages.map((img) => (
                                             <MediaThumb
-                                                previewUrl={create3dSource.preview}
-                                                disabled={
-                                                    createForm.formState.isSubmitting ||
-                                                    generating3dCreate
-                                                }
-                                                removeLabel="Remove source photo"
-                                                onRemove={removeCreate3dSource}
+                                                key={img.key}
+                                                previewUrl={img.preview}
+                                                disabled={createForm.formState.isSubmitting}
+                                                removeLabel="Remove image"
+                                                onRemove={() => removeCreateImage(img.key)}
                                             />
-                                        ) : null}
-                                        {!create3dSource ? (
+                                        ))}
+                                        {createImages.length < 5 ? (
                                             <>
                                                 <input
-                                                    ref={create3dImageInputRef}
+                                                    ref={createImageInputRef}
                                                     type="file"
                                                     accept="image/*"
+                                                    multiple
                                                     className="hidden"
                                                     onChange={(e) => {
-                                                        onCreate3dImagePicked(
+                                                        onCreateImagesPicked(e.target.files);
+                                                        e.target.value = "";
+                                                    }}
+                                                />
+                                                <MediaAddTile
+                                                    kind="image"
+                                                    label="Add photos"
+                                                    ariaLabel="Add product images"
+                                                    disabled={createForm.formState.isSubmitting}
+                                                    onClick={() =>
+                                                        createImageInputRef.current?.click()
+                                                    }
+                                                />
+                                            </>
+                                        ) : null}
+                                    </div>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label className="text-(--muted)">
+                                        Product video (optional, one file)
+                                    </Label>
+                                    <div className="flex flex-wrap items-end gap-3">
+                                        {createVideo ? (
+                                            <MediaThumb
+                                                video
+                                                previewUrl={createVideo.preview}
+                                                disabled={createForm.formState.isSubmitting}
+                                                removeLabel="Remove video"
+                                                onRemove={removeCreateVideo}
+                                            />
+                                        ) : null}
+                                        {!createVideo ? (
+                                            <>
+                                                <input
+                                                    ref={createVideoInputRef}
+                                                    type="file"
+                                                    accept="video/*"
+                                                    className="hidden"
+                                                    onChange={(e) => {
+                                                        onCreateVideoPicked(
                                                             e.target.files?.[0] ?? null
                                                         );
                                                         e.target.value = "";
                                                     }}
                                                 />
                                                 <MediaAddTile
-                                                    kind="source"
-                                                    label="2D source"
-                                                    ariaLabel="Upload 2D photo for 3D generation"
-                                                    disabled={
-                                                        createForm.formState.isSubmitting ||
-                                                        generating3dCreate
-                                                    }
+                                                    kind="video"
+                                                    label="Add video"
+                                                    ariaLabel="Add product video"
+                                                    disabled={createForm.formState.isSubmitting}
                                                     onClick={() =>
-                                                        create3dImageInputRef.current?.click()
+                                                        createVideoInputRef.current?.click()
                                                     }
                                                 />
                                             </>
                                         ) : null}
-                                        {create3dSource ? (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                className={cn(btnOutline, "gap-2")}
+                                    </div>
+                                </div>
+                            </>
+                        }
+                        threeDSection={
+                            <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
+                                <div>
+                                    <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
+                                        AI-generated 3D model
+                                    </p>
+                                    <p className="mt-1 text-xs text-(--muted)">
+                                        Upload a clear, well-lit 2D photo. Wait for generation to
+                                        finish before creating the listing.
+                                    </p>
+                                </div>
+                                <div className="flex flex-wrap items-end gap-3">
+                                    {create3dSource ? (
+                                        <MediaThumb
+                                            previewUrl={create3dSource.preview}
+                                            disabled={
+                                                createForm.formState.isSubmitting ||
+                                                generating3dCreate
+                                            }
+                                            removeLabel="Remove source photo"
+                                            onRemove={removeCreate3dSource}
+                                        />
+                                    ) : null}
+                                    {!create3dSource ? (
+                                        <>
+                                            <input
+                                                ref={create3dImageInputRef}
+                                                type="file"
+                                                accept="image/*"
+                                                className="hidden"
+                                                onChange={(e) => {
+                                                    onCreate3dImagePicked(
+                                                        e.target.files?.[0] ?? null
+                                                    );
+                                                    e.target.value = "";
+                                                }}
+                                            />
+                                            <MediaAddTile
+                                                kind="source"
+                                                label="2D source"
+                                                ariaLabel="Upload 2D photo for 3D generation"
                                                 disabled={
                                                     createForm.formState.isSubmitting ||
                                                     generating3dCreate
                                                 }
-                                                onClick={() => void runGenerate3dCreate()}
-                                            >
-                                                {generating3dCreate ? (
-                                                    <Loader2
-                                                        className="h-4 w-4 animate-spin"
-                                                        aria-hidden
-                                                    />
-                                                ) : null}
-                                                Generate 3D
-                                            </Button>
-                                        ) : null}
-                                    </div>
-                                    {create3dGlb ? (
-                                        <FormCardModelViewer
-                                            modelUrl={create3dGlb.previewUrl}
-                                            statusSlot={
-                                                <>
-                                                    <p className="text-xs text-(--muted)">
-                                                        Generated model preview — not saved to
-                                                        storage until you create the listing.
-                                                    </p>
-                                                    <button
-                                                        type="button"
-                                                        className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
-                                                        onClick={removeCreate3dGlbDraft}
-                                                    >
-                                                        Remove draft model
-                                                    </button>
-                                                </>
+                                                onClick={() =>
+                                                    create3dImageInputRef.current?.click()
+                                                }
+                                            />
+                                        </>
+                                    ) : null}
+                                    {create3dSource ? (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className={cn(btnOutline, "gap-2")}
+                                            disabled={
+                                                createForm.formState.isSubmitting ||
+                                                generating3dCreate
                                             }
-                                        />
+                                            onClick={() => void runGenerate3dCreate()}
+                                        >
+                                            {generating3dCreate ? (
+                                                <Loader2
+                                                    className="h-4 w-4 animate-spin"
+                                                    aria-hidden
+                                                />
+                                            ) : null}
+                                            Generate 3D
+                                        </Button>
                                     ) : null}
                                 </div>
-                            }
-                            dimensionsSection={
-                                create3dGlb ? (
-                                    <div className="grid gap-2">
-                                        <Label
-                                            htmlFor="create-dimensions"
-                                            className="text-(--muted)"
-                                        >
-                                            Available dimensions (3D picker){" "}
-                                            <span className="text-red-400" aria-hidden>
-                                                *
-                                            </span>
-                                        </Label>
-                                        <Textarea
-                                            id="create-dimensions"
-                                            required
-                                            placeholder={
-                                                "One per line, e.g.\n60 × 60 cm\n80 × 80 cm"
-                                            }
-                                            className={cn(
-                                                inputDark,
-                                                "min-h-[72px] font-mono text-xs"
-                                            )}
-                                            {...createForm.register("dimensionsText")}
-                                        />
-                                        {createForm.formState.errors.dimensionsText ? (
-                                            <p className="text-xs text-red-400">
-                                                {createForm.formState.errors.dimensionsText.message}
-                                            </p>
-                                        ) : null}
-                                        <p className="text-xs text-(--muted)">
-                                            Required when you have generated a 3D model for this
-                                            listing.
+                                {create3dGlb ? (
+                                    <FormCardModelViewer
+                                        modelUrl={create3dGlb.previewUrl}
+                                        statusSlot={
+                                            <>
+                                                <p className="text-xs text-(--muted)">
+                                                    Generated model preview — not saved to storage
+                                                    until you create the listing.
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
+                                                    onClick={removeCreate3dGlbDraft}
+                                                >
+                                                    Remove draft model
+                                                </button>
+                                            </>
+                                        }
+                                    />
+                                ) : null}
+                            </div>
+                        }
+                        dimensionsSection={
+                            create3dGlb ? (
+                                <div className="grid gap-2">
+                                    <Label htmlFor="create-dimensions" className="text-(--muted)">
+                                        Available dimensions (3D picker){" "}
+                                        <span className="text-red-400" aria-hidden>
+                                            *
+                                        </span>
+                                    </Label>
+                                    <Textarea
+                                        id="create-dimensions"
+                                        required
+                                        placeholder={"One per line, e.g.\n60 × 60 cm\n80 × 80 cm"}
+                                        className={cn(inputDark, "min-h-[72px] font-mono text-xs")}
+                                        {...createForm.register("dimensionsText")}
+                                    />
+                                    {createForm.formState.errors.dimensionsText ? (
+                                        <p className="text-xs text-red-400">
+                                            {createForm.formState.errors.dimensionsText.message}
                                         </p>
-                                    </div>
-                                ) : null
-                            }
-                        />
-                        <div className="flex flex-wrap items-end gap-2 sm:col-span-2">
-                            <Button
-                                type="submit"
-                                disabled={createForm.formState.isSubmitting}
-                                className={btnPrimary}
-                            >
-                                {createForm.formState.isSubmitting ? "Creating…" : "Create product"}
-                            </Button>
-                        </div>
-                    </form>
+                                    ) : null}
+                                    <p className="text-xs text-(--muted)">
+                                        Required when you have generated a 3D model for this
+                                        listing.
+                                    </p>
+                                </div>
+                            ) : null
+                        }
+                    />
+                    <div className="flex flex-wrap items-end gap-2 sm:col-span-2">
+                        <Button
+                            type="submit"
+                            disabled={createForm.formState.isSubmitting}
+                            className={btnPrimary}
+                        >
+                            {createForm.formState.isSubmitting ? "Creating…" : "Create product"}
+                        </Button>
+                    </div>
+                </form>
             </ListingFormModal>
 
             <ListingFormModal
@@ -1471,8 +1519,8 @@ export default function SellerListingsPage() {
                 title="Edit listing"
                 description={
                     selected?.isPublished
-                        ? "Update listing saves changes to your live product."
-                        : "Publish listing saves everything and sets the product live (verification rules still apply)."
+                        ? "Save changes updates your live listing."
+                        : "Save changes stores your draft. Use Publish in the actions column when you’re ready to go live (verification rules still apply)."
                 }
                 headerExtras={
                     selected ? (
@@ -1485,311 +1533,293 @@ export default function SellerListingsPage() {
                     ) : null
                 }
             >
-                    <form
-                        className="grid gap-4 sm:grid-cols-2"
-                        onSubmit={editForm.handleSubmit((values) =>
-                            handleEditSubmit(values, {
-                                publishAfter: !selected?.isPublished
-                            })
-                        )}
-                    >
-                        <ProductFormFields
-                            register={editForm.register}
-                            control={editForm.control}
-                            errors={editForm.formState.errors}
-                            idPrefix="edit"
-                            showStock={!editMadeToOrder}
-                            mediaSection={
-                                <>
-                                    <div className="grid gap-2">
-                                        <Label className="text-(--muted)">
-                                            Product images (max 5)
-                                        </Label>
-                                        <div className="flex flex-wrap items-end gap-3">
-                                            {editImages.map((entry) =>
-                                                entry.kind === "server" ? (
-                                                    <MediaThumb
-                                                        key={entry.key}
-                                                        previewUrl={entry.url}
-                                                        disabled={
-                                                            editForm.formState.isSubmitting ||
-                                                            mediaBusy
-                                                        }
-                                                        removeLabel="Remove image"
-                                                        onRemove={() =>
-                                                            void removeEditServerImage(
-                                                                entry.mediaId
-                                                            )
-                                                        }
-                                                    />
-                                                ) : (
-                                                    <MediaThumb
-                                                        key={entry.key}
-                                                        previewUrl={entry.preview}
-                                                        disabled={
-                                                            editForm.formState.isSubmitting ||
-                                                            mediaBusy
-                                                        }
-                                                        removeLabel="Remove image"
-                                                        onRemove={() =>
-                                                            removeEditLocalImage(entry.key)
-                                                        }
-                                                    />
-                                                )
-                                            )}
-                                            {editImages.length < 5 ? (
-                                                <>
-                                                    <input
-                                                        ref={editImageInputRef}
-                                                        type="file"
-                                                        accept="image/*"
-                                                        multiple
-                                                        className="hidden"
-                                                        onChange={(e) => {
-                                                            onEditImagesPicked(e.target.files);
-                                                            e.target.value = "";
-                                                        }}
-                                                    />
-                                                    <MediaAddTile
-                                                        kind="image"
-                                                        label="Add photos"
-                                                        ariaLabel="Add product images"
-                                                        disabled={
-                                                            editForm.formState.isSubmitting ||
-                                                            mediaBusy
-                                                        }
-                                                        onClick={() =>
-                                                            editImageInputRef.current?.click()
-                                                        }
-                                                    />
-                                                </>
-                                            ) : null}
-                                        </div>
-                                        <p className="text-xs text-(--muted)">
-                                            New images upload when you update or publish. Remove saved
-                                            images immediately.
-                                        </p>
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label className="text-(--muted)">
-                                            Product video (one file)
-                                        </Label>
-                                        <div className="flex flex-wrap items-end gap-3">
-                                            {editVideo ? (
-                                                <MediaThumb
-                                                    video
-                                                    previewUrl={editVideo.preview}
-                                                    disabled={
-                                                        editForm.formState.isSubmitting || mediaBusy
-                                                    }
-                                                    removeLabel="Remove video"
-                                                    onRemove={() => {
-                                                        if (editVideo.kind === "server") {
-                                                            void removeEditServerVideo();
-                                                        } else {
-                                                            removeEditLocalVideo();
-                                                        }
-                                                    }}
-                                                />
-                                            ) : null}
-                                            {!editVideo ? (
-                                                <>
-                                                    <input
-                                                        ref={editVideoInputRef}
-                                                        type="file"
-                                                        accept="video/*"
-                                                        className="hidden"
-                                                        onChange={(e) => {
-                                                            onEditVideoPicked(
-                                                                e.target.files?.[0] ?? null
-                                                            );
-                                                            e.target.value = "";
-                                                        }}
-                                                    />
-                                                    <MediaAddTile
-                                                        kind="video"
-                                                        label="Add video"
-                                                        ariaLabel="Add product video"
-                                                        disabled={
-                                                            editForm.formState.isSubmitting ||
-                                                            mediaBusy
-                                                        }
-                                                        onClick={() =>
-                                                            editVideoInputRef.current?.click()
-                                                        }
-                                                    />
-                                                </>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                </>
-                            }
-                            threeDSection={
-                                <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
-                                    <div>
-                                        <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
-                                            3D model (Fal AI)
-                                        </p>
-                                        <p className="mt-1 text-xs text-(--muted)">
-                                            Upload a 2D photo and generate a new GLB, or keep the
-                                            saved model below. New models upload to your bucket only
-                                            when you click{" "}
-                                            <span className="text-foreground">Update or publish</span>.
-                                        </p>
-                                    </div>
+                <form
+                    className="grid gap-4 sm:grid-cols-2"
+                    onSubmit={editForm.handleSubmit((values) => handleEditSubmit(values))}
+                >
+                    <ProductFormFields
+                        register={editForm.register}
+                        control={editForm.control}
+                        errors={editForm.formState.errors}
+                        idPrefix="edit"
+                        showStock={!editMadeToOrder}
+                        mediaSection={
+                            <>
+                                <div className="grid gap-2">
+                                    <Label className="text-(--muted)">Product images (max 5)</Label>
                                     <div className="flex flex-wrap items-end gap-3">
-                                        {edit3dSource ? (
-                                            <MediaThumb
-                                                previewUrl={edit3dSource.preview}
-                                                disabled={
-                                                    editForm.formState.isSubmitting ||
-                                                    mediaBusy ||
-                                                    generating3dEdit
-                                                }
-                                                removeLabel="Remove source photo"
-                                                onRemove={removeEdit3dSource}
-                                            />
-                                        ) : null}
-                                        {!edit3dSource ? (
+                                        {editImages.map((entry) =>
+                                            entry.kind === "server" ? (
+                                                <MediaThumb
+                                                    key={entry.key}
+                                                    previewUrl={entry.url}
+                                                    disabled={
+                                                        editForm.formState.isSubmitting
+                                                    }
+                                                    removeLabel="Remove image"
+                                                    onRemove={() => removeEditServerImage(entry.mediaId)}
+                                                />
+                                            ) : entry.kind === "video_field_image" ? (
+                                                <MediaThumb
+                                                    key={entry.key}
+                                                    previewUrl={entry.url}
+                                                    disabled={
+                                                        editForm.formState.isSubmitting
+                                                    }
+                                                    removeLabel="Remove image"
+                                                    onRemove={removeEditVideoFieldImage}
+                                                />
+                                            ) : (
+                                                <MediaThumb
+                                                    key={entry.key}
+                                                    previewUrl={entry.preview}
+                                                    disabled={
+                                                        editForm.formState.isSubmitting
+                                                    }
+                                                    removeLabel="Remove image"
+                                                    onRemove={() => removeEditLocalImage(entry.key)}
+                                                />
+                                            )
+                                        )}
+                                        {editImages.length < 5 ? (
                                             <>
                                                 <input
-                                                    ref={edit3dImageInputRef}
+                                                    ref={editImageInputRef}
                                                     type="file"
                                                     accept="image/*"
+                                                    multiple
                                                     className="hidden"
                                                     onChange={(e) => {
-                                                        onEdit3dImagePicked(
+                                                        onEditImagesPicked(e.target.files);
+                                                        e.target.value = "";
+                                                    }}
+                                                />
+                                                <MediaAddTile
+                                                    kind="image"
+                                                    label="Add photos"
+                                                    ariaLabel="Add product images"
+                                                    disabled={
+                                                        editForm.formState.isSubmitting
+                                                    }
+                                                    onClick={() =>
+                                                        editImageInputRef.current?.click()
+                                                    }
+                                                />
+                                            </>
+                                        ) : null}
+                                    </div>
+                                    <p className="text-xs text-(--muted)">
+                                        New images upload when you save changes. Removing a saved
+                                        image or video takes effect when you save changes.
+                                    </p>
+                                    {editImages.some((e) => e.kind === "video_field_image") ? (
+                                        <p className="text-xs text-amber-200/90">
+                                            This file was stored as a &quot;video&quot; but looks
+                                            like an image. Click Save changes to add it as a product
+                                            image and clear the video field.
+                                        </p>
+                                    ) : null}
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label className="text-(--muted)">
+                                        Product video (one file)
+                                    </Label>
+                                    <div className="flex flex-wrap items-end gap-3">
+                                        {editVideo ? (
+                                            <MediaThumb
+                                                video
+                                                previewUrl={editVideo.preview}
+                                                disabled={
+                                                    editForm.formState.isSubmitting
+                                                }
+                                                removeLabel="Remove video"
+                                                onRemove={() => {
+                                                    if (editVideo.kind === "server") {
+                                                        removeEditServerVideo();
+                                                    } else {
+                                                        removeEditLocalVideo();
+                                                    }
+                                                }}
+                                            />
+                                        ) : null}
+                                        {!editVideo ? (
+                                            <>
+                                                <input
+                                                    ref={editVideoInputRef}
+                                                    type="file"
+                                                    accept="video/*"
+                                                    className="hidden"
+                                                    onChange={(e) => {
+                                                        onEditVideoPicked(
                                                             e.target.files?.[0] ?? null
                                                         );
                                                         e.target.value = "";
                                                     }}
                                                 />
                                                 <MediaAddTile
-                                                    kind="source"
-                                                    label="2D source"
-                                                    ariaLabel="Upload 2D photo for 3D generation"
+                                                    kind="video"
+                                                    label="Add video"
+                                                    ariaLabel="Add product video"
                                                     disabled={
-                                                        editForm.formState.isSubmitting ||
-                                                        mediaBusy ||
-                                                        generating3dEdit
+                                                        editForm.formState.isSubmitting
                                                     }
                                                     onClick={() =>
-                                                        edit3dImageInputRef.current?.click()
+                                                        editVideoInputRef.current?.click()
                                                     }
                                                 />
                                             </>
                                         ) : null}
-                                        {edit3dSource ? (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                className={cn(btnOutline, "gap-2")}
-                                                disabled={
-                                                    editForm.formState.isSubmitting ||
-                                                    mediaBusy ||
-                                                    generating3dEdit
-                                                }
-                                                onClick={() => void runGenerate3dEdit()}
-                                            >
-                                                {generating3dEdit ? (
-                                                    <Loader2
-                                                        className="h-4 w-4 animate-spin"
-                                                        aria-hidden
-                                                    />
-                                                ) : null}
-                                                Generate 3D
-                                            </Button>
-                                        ) : null}
                                     </div>
-                                    {editModelPreviewUrl ? (
-                                        <FormCardModelViewer
-                                            modelUrl={editModelPreviewUrl}
-                                            statusSlot={
-                                                edit3dGlb ? (
-                                                    <>
-                                                        <p className="text-xs text-(--muted)">
-                                                            New generated model — replaces the saved
-                                                            GLB when you update or publish.
-                                                        </p>
-                                                        <button
-                                                            type="button"
-                                                            className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
-                                                            onClick={removeEdit3dGlbDraft}
-                                                        >
-                                                            Remove draft model
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <p className="text-xs text-(--muted)">
-                                                        Saved listing model — upload a new 2D photo
-                                                        and generate to replace on update or publish.
-                                                    </p>
-                                                )
+                                </div>
+                            </>
+                        }
+                        threeDSection={
+                            <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
+                                <div>
+                                    <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
+                                        AI-generated 3D model
+                                    </p>
+                                    <p className="mt-1 text-xs text-(--muted)">
+                                        Upload a 2D photo and generate a new GLB, or keep the saved
+                                        model below. New models upload to your bucket when you click{" "}
+                                        <span className="text-foreground">Save changes</span>.
+                                    </p>
+                                </div>
+                                <div className="flex flex-wrap items-end gap-3">
+                                    {edit3dSource ? (
+                                        <MediaThumb
+                                            previewUrl={edit3dSource.preview}
+                                            disabled={
+                                                editForm.formState.isSubmitting ||
+                                                generating3dEdit
                                             }
+                                            removeLabel="Remove source photo"
+                                            onRemove={removeEdit3dSource}
                                         />
                                     ) : null}
-                                </div>
-                            }
-                            dimensionsSection={
-                                editModelPreviewUrl ? (
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="edit-dimensions" className="text-(--muted)">
-                                            Available dimensions (3D picker){" "}
-                                            <span className="text-red-400" aria-hidden>
-                                                *
-                                            </span>
-                                        </Label>
-                                        <Textarea
-                                            id="edit-dimensions"
-                                            required
-                                            placeholder={
-                                                "One per line, e.g.\n60 × 60 cm\n80 × 80 cm"
+                                    {!edit3dSource ? (
+                                        <>
+                                            <input
+                                                ref={edit3dImageInputRef}
+                                                type="file"
+                                                accept="image/*"
+                                                className="hidden"
+                                                onChange={(e) => {
+                                                    onEdit3dImagePicked(
+                                                        e.target.files?.[0] ?? null
+                                                    );
+                                                    e.target.value = "";
+                                                }}
+                                            />
+                                            <MediaAddTile
+                                                kind="source"
+                                                label="2D source"
+                                                ariaLabel="Upload 2D photo for 3D generation"
+                                                disabled={
+                                                    editForm.formState.isSubmitting ||
+                                                    generating3dEdit
+                                                }
+                                                onClick={() => edit3dImageInputRef.current?.click()}
+                                            />
+                                        </>
+                                    ) : null}
+                                    {edit3dSource ? (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className={cn(btnOutline, "gap-2")}
+                                            disabled={
+                                                editForm.formState.isSubmitting ||
+                                                generating3dEdit
                                             }
-                                            className={cn(
-                                                inputDark,
-                                                "min-h-[72px] font-mono text-xs"
-                                            )}
-                                            {...editForm.register("dimensionsText")}
-                                        />
-                                        {editForm.formState.errors.dimensionsText ? (
-                                            <p className="text-xs text-red-400">
-                                                {editForm.formState.errors.dimensionsText.message}
-                                            </p>
-                                        ) : null}
-                                        <p className="text-xs text-(--muted)">
-                                            Required while this listing has a 3D model (generated or
-                                            saved).
+                                            onClick={() => void runGenerate3dEdit()}
+                                        >
+                                            {generating3dEdit ? (
+                                                <Loader2
+                                                    className="h-4 w-4 animate-spin"
+                                                    aria-hidden
+                                                />
+                                            ) : null}
+                                            Generate 3D
+                                        </Button>
+                                    ) : null}
+                                </div>
+                                {editModelPreviewUrl ? (
+                                    <FormCardModelViewer
+                                        modelUrl={editModelPreviewUrl}
+                                        statusSlot={
+                                            edit3dGlb ? (
+                                                <>
+                                                    <p className="text-xs text-(--muted)">
+                                                        New generated model — replaces the saved GLB
+                                                        when you save changes.
+                                                    </p>
+                                                    <button
+                                                        type="button"
+                                                        className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
+                                                        onClick={removeEdit3dGlbDraft}
+                                                    >
+                                                        Remove draft model
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <p className="text-xs text-(--muted)">
+                                                    Saved listing model — upload a new 2D photo and
+                                                    generate to replace when you save changes.
+                                                </p>
+                                            )
+                                        }
+                                    />
+                                ) : null}
+                            </div>
+                        }
+                        dimensionsSection={
+                            editModelPreviewUrl ? (
+                                <div className="grid gap-2">
+                                    <Label htmlFor="edit-dimensions" className="text-(--muted)">
+                                        Available dimensions (3D picker){" "}
+                                        <span className="text-red-400" aria-hidden>
+                                            *
+                                        </span>
+                                    </Label>
+                                    <Textarea
+                                        id="edit-dimensions"
+                                        required
+                                        placeholder={"One per line, e.g.\n60 × 60 cm\n80 × 80 cm"}
+                                        className={cn(inputDark, "min-h-[72px] font-mono text-xs")}
+                                        {...editForm.register("dimensionsText")}
+                                    />
+                                    {editForm.formState.errors.dimensionsText ? (
+                                        <p className="text-xs text-red-400">
+                                            {editForm.formState.errors.dimensionsText.message}
                                         </p>
-                                    </div>
-                                ) : null
-                            }
-                        />
-                        <div className="flex flex-wrap gap-2 sm:col-span-2">
-                            <Button
-                                type="submit"
-                                disabled={editForm.formState.isSubmitting}
-                                className={btnPrimary}
-                            >
-                                {editForm.formState.isSubmitting
-                                    ? "Working…"
-                                    : selected?.isPublished
-                                      ? "Update listing"
-                                      : "Publish listing"}
-                            </Button>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="border-red-500/40 text-red-300 hover:bg-red-950/30"
-                                onClick={() => {
-                                    if (selected) {
-                                        void handleDeleteProduct(selected.id);
-                                    }
-                                }}
-                            >
-                                Delete
-                            </Button>
-                        </div>
-                    </form>
+                                    ) : null}
+                                    <p className="text-xs text-(--muted)">
+                                        Required while this listing has a 3D model (generated or
+                                        saved).
+                                    </p>
+                                </div>
+                            ) : null
+                        }
+                    />
+                    <div className="flex flex-wrap gap-2 sm:col-span-2">
+                        <Button
+                            type="submit"
+                            disabled={editForm.formState.isSubmitting}
+                            className={btnPrimary}
+                        >
+                            {editForm.formState.isSubmitting ? "Saving…" : "Save changes"}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            className={btnOutline}
+                            onClick={() => closeEditPanel()}
+                        >
+                            Cancel
+                        </Button>
+                    </div>
+                </form>
             </ListingFormModal>
 
             <div className="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">

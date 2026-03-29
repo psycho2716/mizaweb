@@ -41,7 +41,11 @@ import {
     persistVerification,
     syncFromSupabaseIfStale
 } from "./integrations/supabase/persistence";
-import { generateGlbUrlFromImageBuffer, generateGlbUrlFromImageUrl } from "./lib/fal-image-to-3d";
+import {
+    generateGlbUrlFromImageBuffer,
+    generateGlbUrlFromImageUrl,
+    isNsfwContentRejectedError
+} from "./lib/fal-image-to-3d";
 import { hashPassword, verifyPassword } from "./lib/password";
 import {
     PRODUCT_COLORS_OPTION_NAME,
@@ -1286,7 +1290,14 @@ app.post("/products", authenticate, authorizeRole(["seller"]), async (request, r
         const mediaId = `pm-${randomUUID()}`;
         const media = { id: mediaId, productId: id, url };
         db.productMedia.set(mediaId, media);
-        persistProductMedia(media);
+        try {
+            await persistProductMedia(media);
+        } catch (err) {
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save product images"
+            });
+            return;
+        }
     }
 
     try {
@@ -1390,17 +1401,30 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
     }
 
     if (parsed.data.imageUrls !== undefined) {
-        for (const media of [...db.productMedia.values()]) {
-            if (media.productId === id) {
-                db.productMedia.delete(media.id);
-                deleteProductMedia(media.id);
+        const staleMedia = [...db.productMedia.values()].filter((m) => m.productId === id);
+        for (const media of staleMedia) {
+            try {
+                await deleteProductMedia(media.id);
+            } catch (err) {
+                response.status(500).json({
+                    error: err instanceof Error ? err.message : "Failed to remove existing product images"
+                });
+                return;
             }
+            db.productMedia.delete(media.id);
         }
         for (const url of parsed.data.imageUrls) {
             const mediaId = `pm-${randomUUID()}`;
             const media = { id: mediaId, productId: id, url };
             db.productMedia.set(mediaId, media);
-            persistProductMedia(media);
+            try {
+                await persistProductMedia(media);
+            } catch (err) {
+                response.status(500).json({
+                    error: err instanceof Error ? err.message : "Failed to save product images"
+                });
+                return;
+            }
         }
     }
 
@@ -1485,11 +1509,19 @@ app.get("/products/:id", (_request, response) => {
     response.json({ data: { ...product, media, options, rules } });
 });
 
-app.delete("/products/:id", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.delete("/products/:id", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
     const product = db.products.get(id);
     if (!product || product.sellerId !== request.authUserId) {
         response.status(404).json({ error: "Not found" });
+        return;
+    }
+    try {
+        await deleteProductMediaByProduct(id);
+    } catch (err) {
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to delete product media"
+        });
         return;
     }
     db.products.delete(id);
@@ -1508,14 +1540,13 @@ app.delete("/products/:id", authenticate, authorizeRole(["seller"]), (request, r
             db.customizationRules.delete(rule.id);
         }
     }
-    deleteProductMediaByProduct(id);
     deleteCustomizationOptionsByProduct(id);
     deleteCustomizationRulesByProduct(id);
     deleteProduct(id);
     response.json({ ok: true });
 });
 
-app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const productId = z.string().min(1).parse(request.params.id);
     const product = db.products.get(productId);
     if (!product || product.sellerId !== request.authUserId) {
@@ -1536,7 +1567,15 @@ app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), (reques
     const id = `pm-${randomUUID()}`;
     const media = { id, productId, url: parsed.data.url };
     db.productMedia.set(id, media);
-    persistProductMedia(media);
+    try {
+        await persistProductMedia(media);
+    } catch (err) {
+        db.productMedia.delete(id);
+        response.status(500).json({
+            error: err instanceof Error ? err.message : "Failed to save product image"
+        });
+        return;
+    }
     response.status(201).json({ id });
 });
 
@@ -1612,7 +1651,7 @@ app.delete(
     "/products/:id/media/:mediaId",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const productId = z.string().min(1).parse(request.params.id);
         const mediaId = z.string().min(1).parse(request.params.mediaId);
         const product = db.products.get(productId);
@@ -1626,8 +1665,15 @@ app.delete(
             response.status(404).json({ error: "Not found" });
             return;
         }
+        try {
+            await deleteProductMedia(mediaId);
+        } catch (err) {
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to delete media"
+            });
+            return;
+        }
         db.productMedia.delete(mediaId);
-        deleteProductMedia(mediaId);
         response.json({ ok: true });
     }
 );
@@ -2168,6 +2214,7 @@ app.get("/admin/overview", authenticate, authorizeRole(["admin"]), (_request, re
 app.get("/admin/users", authenticate, authorizeRole(["admin"]), (request, response) => {
     const { page, limit } = parseListPagination(request.query);
     const rows = [...db.users.values()]
+        .filter((u) => u.role !== "admin")
         .sort((a, b) => a.email.toLowerCase().localeCompare(b.email.toLowerCase()))
         .map((u) => ({
             id: u.id,
@@ -2376,6 +2423,14 @@ app.post(
             }
             response.json({ falGlbUrl });
         } catch (error) {
+            if (isNsfwContentRejectedError(error)) {
+                response.status(422).json({
+                    error: error.message,
+                    code: error.code,
+                    nsfwProbability: error.nsfwProbability
+                });
+                return;
+            }
             response.status(502).json({
                 error: error instanceof Error ? error.message : "Image to 3D generation failed"
             });

@@ -1,5 +1,18 @@
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
+/** Thrown when `apiFetch` receives a non-OK response; includes optional `code` from JSON body (e.g. NSFW_REJECTED). */
+export class ApiRequestError extends Error {
+    readonly status: number;
+    readonly code?: string;
+
+    constructor(message: string, status: number, code?: string) {
+        super(message);
+        this.name = "ApiRequestError";
+        this.status = status;
+        this.code = code;
+    }
+}
+
 interface RequestOptions extends RequestInit {
     userId?: string;
     includeGuestSession?: boolean;
@@ -45,13 +58,28 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
         cache: "no-store"
     });
 
-    const payload = (await response.json()) as T | { error: string };
+    let payload: unknown;
+    try {
+        payload = await response.json();
+    } catch {
+        payload = {};
+    }
+
     if (!response.ok) {
-        const error =
-            typeof payload === "object" && payload && "error" in payload
-                ? payload.error
-                : "Request failed";
-        throw new Error(error);
+        let message = "Request failed";
+        let code: string | undefined;
+        if (payload && typeof payload === "object") {
+            const body = payload as { error?: unknown; code?: unknown };
+            if (typeof body.error === "string") {
+                message = body.error;
+            } else if (body.error !== undefined) {
+                message = "Something went wrong. Please try again.";
+            }
+            if (typeof body.code === "string") {
+                code = body.code;
+            }
+        }
+        throw new ApiRequestError(message, response.status, code);
     }
 
     return payload as T;
