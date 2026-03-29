@@ -21,7 +21,7 @@ export function AdminVerificationExpandedPanel({
         <div className="space-y-2.5 rounded-md border border-(--border) bg-(--surface) p-4 text-xs text-(--muted)">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">Account</p>
           <p>
-            <span className="font-semibold text-foreground">Seller user ID: </span>
+            <span className="font-semibold text-foreground">Seller account ID: </span>
             <span className="font-mono text-[11px]">{entry.sellerId}</span>
           </p>
           <p>
@@ -33,12 +33,12 @@ export function AdminVerificationExpandedPanel({
             {entry.seller?.fullName ?? "—"}
           </p>
           <p>
-            <span className="font-semibold text-foreground">Verification ID: </span>
+            <span className="font-semibold text-foreground">Permit request ID: </span>
             <span className="font-mono text-[11px]">{entry.id}</span>
           </p>
           <p>
-            <span className="font-semibold text-foreground">Queue status: </span>
-            Pending review
+            <span className="font-semibold text-foreground">Status: </span>
+            Waiting for review
           </p>
         </div>
         <div className="space-y-2.5 rounded-md border border-(--border) bg-(--surface) p-4 text-xs text-(--muted)">
@@ -94,16 +94,16 @@ export function AdminVerificationExpandedPanel({
         </div>
         <div className="space-y-2.5 rounded-md border border-(--border) bg-(--surface) p-4 text-xs text-(--muted)">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
-            Document & payouts
+            Permit & payouts
           </p>
           {entry.permitObjectPath ? (
             <p>
-              <span className="font-semibold text-foreground">Storage path: </span>
+              <span className="font-semibold text-foreground">File path (system): </span>
               <span className="break-all font-mono text-[10px]">{entry.permitObjectPath}</span>
             </p>
           ) : null}
           <p>
-            <span className="font-semibold text-foreground">Stored permit URL: </span>
+            <span className="font-semibold text-foreground">Permit link: </span>
             <span className="break-all font-mono text-[10px]" title={entry.permitFileUrl}>
               {entry.permitFileUrl.length > 96
                 ? `${entry.permitFileUrl.slice(0, 96)}…`
@@ -144,13 +144,13 @@ export function AdminVerificationExpandedPanel({
           htmlFor={`reject-${entry.id}`}
           className="text-[10px] uppercase tracking-[0.14em] text-(--muted)"
         >
-          Reject & request new permit
+          Decline and ask for a new permit
         </Label>
         <Input
           id={`reject-${entry.id}`}
           value={rejectReasonById[entry.id] ?? ""}
           onChange={(event) => onRejectReasonChange(entry.id, event.target.value)}
-          placeholder="Reason for the seller (required to reject)"
+          placeholder="Explain what the seller should fix (required to decline)"
           className="mt-2 border-(--border) bg-(--surface) text-foreground"
         />
         <Button
@@ -160,7 +160,7 @@ export function AdminVerificationExpandedPanel({
           className="mt-3 border-red-500/40 text-red-400 hover:bg-red-500/10"
           onClick={() => void onReject(entry.id)}
         >
-          Reject & request resubmission
+          Decline request
         </Button>
       </div>
     </>

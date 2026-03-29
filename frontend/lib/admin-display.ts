@@ -5,7 +5,7 @@ export function formatVerificationStatusLabel(status: string | undefined | null)
     }
     const key = status.toLowerCase();
     const labels: Record<string, string> = {
-        unsubmitted: "Unsubmitted",
+        unsubmitted: "Not submitted",
         pending: "Pending",
         approved: "Approved",
         rejected: "Rejected"

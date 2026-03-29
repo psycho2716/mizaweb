@@ -23,6 +23,9 @@ export function AdminSellerLocationMap({
   longitude,
   address,
   className,
+  sectionHeading = "Shop location",
+  mapFrameClassName = "relative z-0 h-44 w-full overflow-hidden rounded-md border border-(--border)",
+  showSectionLabel = true,
 }: AdminSellerLocationMapProps) {
   const apiKey = getGoogleMapsBrowserApiKey();
 
@@ -40,11 +43,15 @@ export function AdminSellerLocationMap({
 
   return (
     <div className={cn("space-y-2", className)}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">Shop location</p>
+      {showSectionLabel ? (
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+          {sectionHeading}
+        </p>
+      ) : null}
 
       {!hasCoords ? (
         <div className="rounded-md border border-(--border) bg-[#080b10]/60 px-3 py-2 text-xs text-(--muted)">
-          <p>No map coordinates on file for this seller.</p>
+          <p>No map pin saved yet. The seller can add one in account settings.</p>
           {queryLink ? (
             <a
               href={queryLink}
@@ -52,16 +59,19 @@ export function AdminSellerLocationMap({
               rel="noopener noreferrer"
               className="mt-2 inline-block font-medium text-(--accent) hover:underline"
             >
-              Open address in Google Maps
+              Open in Google Maps
             </a>
           ) : null}
         </div>
       ) : !apiKey ? (
         <div className="rounded-md border border-(--border) bg-[#080b10]/60 px-3 py-2 text-xs text-(--muted)">
           <p className="tabular-nums">
-            Coordinates: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+            Location: {latitude.toFixed(5)}, {longitude.toFixed(5)}
           </p>
-          <p className="mt-1">Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to show the map preview.</p>
+          <p className="mt-1">
+            Embedded map needs a Google Maps key in site settings. Use the link below to view the
+            location.
+          </p>
           {queryLink ? (
             <a
               href={queryLink}
@@ -76,7 +86,7 @@ export function AdminSellerLocationMap({
       ) : (
         <>
           <APIProvider apiKey={apiKey}>
-            <div className="relative z-0 h-44 w-full overflow-hidden rounded-md border border-(--border)">
+            <div className={mapFrameClassName}>
               <Map
                 defaultCenter={{ lat: latitude, lng: longitude }}
                 defaultZoom={15}

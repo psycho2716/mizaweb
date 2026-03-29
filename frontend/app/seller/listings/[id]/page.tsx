@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import { deleteProductById, getSellerProductDetail, updateProduct } from "@/lib/api/endpoints";
-import { cn } from "@/lib/utils";
+import { cn, formatPeso } from "@/lib/utils";
 import type { ProductDetail } from "@/types";
 
 const inputDark =
@@ -32,6 +33,7 @@ function ProductEditor({
     productId: string;
     onSaved: () => void;
 }) {
+    const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
     const router = useRouter();
     const response = use(useMemo(() => getSellerProductDetail(productId), [productId]));
     const product: ProductDetail = response.data;
@@ -47,11 +49,11 @@ function ProductEditor({
         <div className="p-4 md:p-6">
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                        Inventory management
+                    <p className="text-[10px] font-semibold tracking-wide text-(--accent)">
+                        Your products
                     </p>
                     <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-                        Edit specimen
+                        Edit product
                         <span className="text-(--muted)"> · </span>
                         <span className="font-mono text-lg text-(--accent)">{product.id}</span>
                     </h1>
@@ -78,7 +80,7 @@ function ProductEditor({
                         className={btnPrimary}
                         onClick={() => router.push("/seller/listings")}
                     >
-                        Back to manifest
+                        Back to products
                     </Button>
                 </div>
             </div>
@@ -86,8 +88,8 @@ function ProductEditor({
             <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
                 <div className="space-y-6">
                     <section className="rounded-lg border border-(--border) bg-(--surface) p-5">
-                        <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground">
-                            Listing data
+                        <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold tracking-tight text-foreground">
+                            Product details
                         </h2>
                         <div className="mt-4 grid gap-3">
                             <Label htmlFor="title" className="text-(--muted)">
@@ -119,14 +121,14 @@ function ProductEditor({
                                 onChange={(e) => setBasePrice(Number(e.target.value))}
                             />
                             <Label htmlFor="model3d" className="text-(--muted)">
-                                3D model URL (.glb / .gltf)
+                                3D file link (optional)
                             </Label>
                             <Input
                                 id="model3d"
                                 className={inputDark}
                                 value={model3dUrl}
                                 onChange={(e) => setModel3dUrl(e.target.value)}
-                                placeholder="https://.../model.glb"
+                                placeholder="https://… (3D model file)"
                             />
                             {model3dUrl ? (
                                 <a
@@ -135,15 +137,15 @@ function ProductEditor({
                                     rel="noreferrer"
                                     className="text-sm font-medium text-(--accent) underline-offset-2 hover:underline"
                                 >
-                                    Open 3D model
+                                    Open 3D file
                                 </a>
                             ) : null}
                         </div>
                     </section>
 
                     <section className="rounded-lg border border-(--border) bg-(--surface) p-5">
-                        <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground">
-                            Visual assets
+                        <h2 className="border-l-2 border-(--accent) pl-3 text-sm font-semibold tracking-tight text-foreground">
+                            Photos &amp; files
                         </h2>
                         <div className="mt-4 grid gap-2">
                             {product.media.length === 0 ? (
@@ -191,6 +193,13 @@ function ProductEditor({
                             variant="outline"
                             className="border-red-500/40 text-red-300 hover:bg-red-950/30"
                             onClick={async () => {
+                                const ok = await requestConfirm({
+                                    title: "Delete this product?",
+                                    description: "This removes the listing and cannot be undone.",
+                                    confirmLabel: "Delete",
+                                    destructive: true
+                                });
+                                if (!ok) return;
                                 try {
                                     await deleteProductById(productId);
                                     toast.success("Product deleted.");
@@ -235,21 +244,22 @@ function ProductEditor({
                         <div className="border-t border-(--border) p-4">
                             <p className="text-sm font-semibold text-foreground">{product.title}</p>
                             <p className="mt-1 text-xs text-(--muted)">
-                                PHP {product.basePrice.toLocaleString()} / unit
+                                {formatPeso(product.basePrice)} / unit
                             </p>
                         </div>
                     </div>
                     <div className="rounded-lg border border-(--border) bg-[#080b10]/60 p-4 text-xs text-(--muted)">
-                        <p className="font-semibold uppercase tracking-wider text-(--accent)">
+                        <p className="font-semibold tracking-wide text-(--accent)">
                             Tip
                         </p>
                         <p className="mt-2 leading-relaxed">
-                            Accurate titles and a verified 3D asset improve discovery. Save changes
-                            to sync your catalog.
+                            Clear titles and good photos help customers find your products. Save to
+                            update your store.
                         </p>
                     </div>
                 </aside>
             </div>
+            {confirmDialog}
         </div>
     );
 }

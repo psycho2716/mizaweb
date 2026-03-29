@@ -7,6 +7,8 @@ export interface AuthUser {
     email: string;
     role: UserRole;
     fullName?: string;
+    /** Avatar / portrait URL (auth user_metadata in Supabase). */
+    profileImageUrl?: string;
     /** Account cannot sign in or use the API (admin suspend / auth ban). */
     suspended?: boolean;
 }
@@ -50,6 +52,23 @@ export interface ProductRecord {
     videoUrl?: string;
 }
 
+export type SellerLocationRequestStatus = "pending" | "approved" | "rejected";
+
+/** Seller asks admin to move the public shop map pin; coordinates apply only after approval. */
+export interface SellerLocationChangeRequest {
+    id: string;
+    sellerId: string;
+    requestedLatitude: number;
+    requestedLongitude: number;
+    previousLatitude?: number;
+    previousLongitude?: number;
+    note?: string;
+    status: SellerLocationRequestStatus;
+    createdAt: string;
+    reviewedAt?: string;
+    rejectionReason?: string;
+}
+
 export interface VerificationSubmission {
     id: string;
     sellerId: string;
@@ -86,6 +105,31 @@ export interface OrderRecord {
 export interface OrderMessage {
     id: string;
     orderId: string;
+    senderId: string;
+    body: string;
+    createdAt: string;
+}
+
+export interface ProductReviewRecord {
+    id: string;
+    productId: string;
+    buyerId: string;
+    rating: number;
+    body: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface ConversationRecord {
+    id: string;
+    buyerId: string;
+    sellerId: string;
+    updatedAt: string;
+}
+
+export interface ConversationMessageRecord {
+    id: string;
+    conversationId: string;
     senderId: string;
     body: string;
     createdAt: string;

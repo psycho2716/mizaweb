@@ -7,6 +7,7 @@ import { SellerConsoleShell } from "@/components/seller/seller-console-shell";
 function resolveActiveNav(pathname: string) {
   if (pathname.startsWith("/seller/listings")) return "products";
   if (pathname.startsWith("/seller/orders")) return "orders";
+  if (pathname.startsWith("/seller/messages")) return "messages";
   if (pathname.startsWith("/seller/profile") || pathname.startsWith("/seller/payment-methods")) {
     return "profile";
   }
@@ -15,14 +16,15 @@ function resolveActiveNav(pathname: string) {
 
 function resolveSectionTitle(pathname: string): string {
   if (pathname.startsWith("/seller/listings/") && pathname !== "/seller/listings") {
-    return "Specimen editor";
+    return "Edit product";
   }
-  if (pathname.startsWith("/seller/listings")) return "Stone manifest";
-  if (pathname.startsWith("/seller/orders")) return "Order management";
+  if (pathname.startsWith("/seller/listings")) return "Products";
+  if (pathname.startsWith("/seller/orders")) return "Orders";
+  if (pathname.startsWith("/seller/messages")) return "Messages";
   if (pathname.startsWith("/seller/profile") || pathname.startsWith("/seller/payment-methods")) {
-    return "Profile settings";
+    return "Settings";
   }
-  return "Merchant dashboard";
+  return "Seller dashboard";
 }
 
 export function SellerLayoutClient({ children }: { children: ReactNode }) {
@@ -31,11 +33,15 @@ export function SellerLayoutClient({ children }: { children: ReactNode }) {
   const sectionTitle = resolveSectionTitle(pathname);
 
   return (
-    <>
-      <SellerVerificationBanner />
-      <SellerConsoleShell activeNav={activeNav} sectionTitle={sectionTitle}>
-        {children}
-      </SellerConsoleShell>
-    </>
+    <div className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0">
+        <SellerVerificationBanner />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <SellerConsoleShell activeNav={activeNav} sectionTitle={sectionTitle}>
+          {children}
+        </SellerConsoleShell>
+      </div>
+    </div>
   );
 }

@@ -24,6 +24,7 @@ import {
     deleteProduct,
     deleteProductMedia,
     deleteProductMediaByProduct,
+    deleteSellerLocationRequestsBySellerId,
     deleteSellerPaymentMethod,
     deleteSellerProfileBySellerId,
     deleteSellerStatusBySellerId,
@@ -31,10 +32,14 @@ import {
     persistCartItem,
     persistCustomizationOption,
     persistCustomizationRule,
+    persistConversation,
+    persistConversationMessage,
     persistOrder,
     persistOrderMessage,
     persistProduct,
     persistProductMedia,
+    persistProductReview,
+    persistSellerLocationChangeRequest,
     persistSellerPaymentMethod,
     persistSellerStatus,
     persistSellerProfile,
@@ -52,15 +57,184 @@ import {
     PRODUCT_DIMENSIONS_OPTION_NAME,
     syncProductDimensionAndColorOptions
 } from "./lib/product-customization";
-import { emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
+import { emitDirectMessage, emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
 import {
     createSignedVerificationDownloadUrl,
     extractVerificationObjectPath,
-    generateVerificationUploadTarget
+    generateVerificationUploadTarget,
+    getVerificationDocsCanonicalUrl,
+    mockVerificationDocsAssetUrl,
+    normalizeVerificationDocsStoredUrl,
+    resolveVerificationDocsReadUrl
 } from "./modules/verification/verification-storage";
-import type { AuthUser, ProductRecord } from "./types/domain";
+import type {
+    AuthUser,
+    ConversationRecord,
+    ProductRecord,
+    SellerLocationChangeRequest,
+    SellerPaymentMethod,
+    SellerProfile
+} from "./types/domain";
 
 const app = express();
+
+async function withResolvedSellerProfileMedia(profile: SellerProfile): Promise<SellerProfile> {
+    const [resolvedPic, resolvedBg] = await Promise.all([
+        resolveVerificationDocsReadUrl(profile.profileImageUrl),
+        resolveVerificationDocsReadUrl(profile.storeBackgroundUrl)
+    ]);
+    const out: SellerProfile = {
+        sellerId: profile.sellerId,
+        businessName: profile.businessName,
+        contactNumber: profile.contactNumber,
+        address: profile.address
+    };
+    if (profile.shopLatitude !== undefined) {
+        out.shopLatitude = profile.shopLatitude;
+    }
+    if (profile.shopLongitude !== undefined) {
+        out.shopLongitude = profile.shopLongitude;
+    }
+    const pic = resolvedPic ?? profile.profileImageUrl;
+    const bg = resolvedBg ?? profile.storeBackgroundUrl;
+    if (pic !== undefined) {
+        out.profileImageUrl = pic;
+    }
+    if (bg !== undefined) {
+        out.storeBackgroundUrl = bg;
+    }
+    return out;
+}
+
+async function withResolvedPaymentQrImages(methods: SellerPaymentMethod[]): Promise<SellerPaymentMethod[]> {
+    return Promise.all(
+        methods.map(async (method) => {
+            if (!method.qrImageUrl) {
+                return method;
+            }
+            const qrImageUrl = await resolveVerificationDocsReadUrl(method.qrImageUrl);
+            return { ...method, qrImageUrl: qrImageUrl ?? method.qrImageUrl };
+        })
+    );
+}
+
+function pendingSellerLocationRequest(sellerId: string): SellerLocationChangeRequest | null {
+    const match = [...db.sellerLocationRequests.values()].find(
+        (r) => r.sellerId === sellerId && r.status === "pending"
+    );
+    return match ?? null;
+}
+
+function removeSellerLocationRequestsFromRuntime(sellerId: string): void {
+    for (const r of [...db.sellerLocationRequests.values()]) {
+        if (r.sellerId === sellerId) {
+            db.sellerLocationRequests.delete(r.id);
+        }
+    }
+    deleteSellerLocationRequestsBySellerId(sellerId);
+}
+
+function productReviewSummaryForProduct(productId: string): {
+    averageRating: number | null;
+    reviewCount: number;
+} {
+    const list = [...db.productReviews.values()].filter((r) => r.productId === productId);
+    if (list.length === 0) {
+        return { averageRating: null, reviewCount: 0 };
+    }
+    const sum = list.reduce((acc, r) => acc + r.rating, 0);
+    return {
+        averageRating: Math.round((sum / list.length) * 10) / 10,
+        reviewCount: list.length
+    };
+}
+
+function sellerReviewAggregate(sellerId: string): {
+    averageRating: number | null;
+    reviewCount: number;
+} {
+    const publishedIds = new Set(
+        [...db.products.values()]
+            .filter((p) => p.sellerId === sellerId && p.isPublished)
+            .map((p) => p.id)
+    );
+    const list = [...db.productReviews.values()].filter((r) => publishedIds.has(r.productId));
+    if (list.length === 0) {
+        return { averageRating: null, reviewCount: 0 };
+    }
+    const sum = list.reduce((acc, r) => acc + r.rating, 0);
+    return {
+        averageRating: Math.round((sum / list.length) * 10) / 10,
+        reviewCount: list.length
+    };
+}
+
+function firstProductThumbnailUrl(productId: string): string | undefined {
+    const media = [...db.productMedia.values()].filter((m) => m.productId === productId);
+    return [...media].sort((a, b) => a.id.localeCompare(b.id))[0]?.url;
+}
+
+function reviewerDisplayLabel(buyerId: string): string {
+    const user = db.users.get(buyerId);
+    if (user?.fullName?.trim()) {
+        return user.fullName.trim();
+    }
+    const tail = buyerId.length >= 4 ? buyerId.slice(-4) : buyerId;
+    return `Buyer · ${tail}`;
+}
+
+function findDirectConversation(buyerId: string, sellerId: string): ConversationRecord | undefined {
+    return [...db.conversations.values()].find(
+        (c) => c.buyerId === buyerId && c.sellerId === sellerId
+    );
+}
+
+/** In-memory buyer-owned data (Supabase CASCADE handles persisted rows when auth user is deleted). */
+function clearBuyerAssociatedRuntimeData(buyerId: string): void {
+    for (const item of [...db.cartItems.values()]) {
+        if (item.buyerId === buyerId) {
+            db.cartItems.delete(item.id);
+            deleteCartItem(item.id);
+        }
+    }
+    for (const order of [...db.orders.values()]) {
+        if (order.buyerId === buyerId) {
+            for (const m of [...db.orderMessages.values()]) {
+                if (m.orderId === order.id) {
+                    db.orderMessages.delete(m.id);
+                }
+            }
+            db.orders.delete(order.id);
+        }
+    }
+    for (const r of [...db.productReviews.values()]) {
+        if (r.buyerId === buyerId) {
+            db.productReviews.delete(r.id);
+        }
+    }
+    for (const conv of [...db.conversations.values()]) {
+        if (conv.buyerId === buyerId) {
+            for (const cm of [...db.conversationMessages.values()]) {
+                if (cm.conversationId === conv.id) {
+                    db.conversationMessages.delete(cm.id);
+                }
+            }
+            db.conversations.delete(conv.id);
+        }
+    }
+}
+
+function cleanupBuyerRuntimeStateAfterAuthDeletion(buyerId: string): void {
+    if (!isSupabaseAuthReady()) {
+        for (const [email, cred] of [...db.credentials.entries()]) {
+            if (cred.userId === buyerId) {
+                db.credentials.delete(email);
+            }
+        }
+    }
+    clearBuyerAssociatedRuntimeData(buyerId);
+    db.users.delete(buyerId);
+}
 
 async function adminDeleteUserAccount(
     targetId: string,
@@ -102,10 +276,15 @@ async function adminDeleteUserAccount(
                 deleteVerificationById(v.id);
             }
         }
+        removeSellerLocationRequestsFromRuntime(targetId);
         for (const m of [...db.sellerPaymentMethods.values()]) {
             if (m.sellerId === targetId) {
+                try {
+                    await deleteSellerPaymentMethod(m.id);
+                } catch (error) {
+                    console.error("[adminDeleteUserAccount] payment method", error);
+                }
                 db.sellerPaymentMethods.delete(m.id);
-                deleteSellerPaymentMethod(m.id);
             }
         }
         db.sellerProfiles.delete(targetId);
@@ -114,12 +293,7 @@ async function adminDeleteUserAccount(
         deleteSellerStatusBySellerId(targetId);
     }
     if (target.role === "buyer") {
-        for (const item of [...db.cartItems.values()]) {
-            if (item.buyerId === targetId) {
-                db.cartItems.delete(item.id);
-                deleteCartItem(item.id);
-            }
-        }
+        clearBuyerAssociatedRuntimeData(targetId);
     }
     db.users.delete(targetId);
     return { ok: true };
@@ -490,7 +664,7 @@ app.get("/auth/me", authenticate, (request, response) => {
     response.json({ user: db.users.get(request.authUserId as string) });
 });
 
-app.get("/sellers/:id/profile", (request, response) => {
+app.get("/sellers/:id/profile", async (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
     const seller = db.users.get(id);
     const profile = db.sellerProfiles.get(id);
@@ -501,21 +675,26 @@ app.get("/sellers/:id/profile", (request, response) => {
         response.status(404).json({ error: "Seller profile not found" });
         return;
     }
+    const reviewAgg = sellerReviewAggregate(id);
+    const resolvedProfile = await withResolvedSellerProfileMedia(profile);
+    const resolvedPayments = await withResolvedPaymentQrImages(paymentMethods);
     response.json({
         data: {
             id: seller.id,
             email: seller.email,
-            ...profile,
-            paymentMethods,
+            ...resolvedProfile,
+            paymentMethods: resolvedPayments,
             verificationStatus: db.sellerStatus.get(id) ?? "unsubmitted",
             publishedProducts: [...db.products.values()].filter(
                 (product) => product.sellerId === id && product.isPublished
-            ).length
+            ).length,
+            averageRating: reviewAgg.averageRating,
+            reviewCount: reviewAgg.reviewCount
         }
     });
 });
 
-app.get("/seller/profile", authenticate, authorizeRole(["seller"]), (request, response) => {
+app.get("/seller/profile", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const sellerId = request.authUserId as string;
     const profile = db.sellerProfiles.get(sellerId);
     const user = db.users.get(sellerId);
@@ -523,15 +702,26 @@ app.get("/seller/profile", authenticate, authorizeRole(["seller"]), (request, re
         response.status(404).json({ error: "Seller profile not found" });
         return;
     }
+    const reviewAgg = sellerReviewAggregate(sellerId);
+    const paymentMethods = [...db.sellerPaymentMethods.values()].filter(
+        (entry) => entry.sellerId === sellerId
+    );
+    const resolvedProfile = await withResolvedSellerProfileMedia(profile);
+    const resolvedPayments = await withResolvedPaymentQrImages(paymentMethods);
     response.json({
         data: {
             id: sellerId,
-            ...profile,
-            paymentMethods: [...db.sellerPaymentMethods.values()].filter(
-                (entry) => entry.sellerId === sellerId
-            ),
+            ...resolvedProfile,
+            paymentMethods: resolvedPayments,
             fullName: user?.fullName,
-            email: user?.email
+            email: user?.email,
+            verificationStatus: db.sellerStatus.get(sellerId) ?? "unsubmitted",
+            publishedProducts: [...db.products.values()].filter(
+                (product) => product.sellerId === sellerId && product.isPublished
+            ).length,
+            averageRating: reviewAgg.averageRating,
+            reviewCount: reviewAgg.reviewCount,
+            pendingLocationRequest: pendingSellerLocationRequest(sellerId)
         }
     });
 });
@@ -542,8 +732,6 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         businessName: z.string().min(2).max(120).optional(),
         contactNumber: z.string().min(7).max(40).optional(),
         address: z.string().min(3).max(255).optional(),
-        shopLatitude: z.number().gte(-90).lte(90).optional(),
-        shopLongitude: z.number().gte(-180).lte(180).optional(),
         profileImageUrl: z.string().url().optional(),
         storeBackgroundUrl: z.string().url().optional()
     });
@@ -563,8 +751,6 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         businessName: profile.businessName,
         contactNumber: profile.contactNumber,
         address: profile.address,
-        shopLatitude: profile.shopLatitude,
-        shopLongitude: profile.shopLongitude,
         profileImageUrl: profile.profileImageUrl,
         storeBackgroundUrl: profile.storeBackgroundUrl
     };
@@ -572,17 +758,15 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
     profile.businessName = parsed.data.businessName ?? profile.businessName;
     profile.contactNumber = parsed.data.contactNumber ?? profile.contactNumber;
     profile.address = parsed.data.address ?? profile.address;
-    if (parsed.data.shopLatitude !== undefined) {
-        profile.shopLatitude = parsed.data.shopLatitude;
-    }
-    if (parsed.data.shopLongitude !== undefined) {
-        profile.shopLongitude = parsed.data.shopLongitude;
-    }
     if (parsed.data.profileImageUrl) {
-        profile.profileImageUrl = parsed.data.profileImageUrl;
+        profile.profileImageUrl =
+            normalizeVerificationDocsStoredUrl(parsed.data.profileImageUrl) ??
+            parsed.data.profileImageUrl;
     }
     if (parsed.data.storeBackgroundUrl) {
-        profile.storeBackgroundUrl = parsed.data.storeBackgroundUrl;
+        profile.storeBackgroundUrl =
+            normalizeVerificationDocsStoredUrl(parsed.data.storeBackgroundUrl) ??
+            parsed.data.storeBackgroundUrl;
     }
 
     const sellerId = request.authUserId as string;
@@ -619,16 +803,6 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
         profile.businessName = previous.businessName;
         profile.contactNumber = previous.contactNumber;
         profile.address = previous.address;
-        if (previous.shopLatitude !== undefined) {
-            profile.shopLatitude = previous.shopLatitude;
-        } else {
-            delete profile.shopLatitude;
-        }
-        if (previous.shopLongitude !== undefined) {
-            profile.shopLongitude = previous.shopLongitude;
-        } else {
-            delete profile.shopLongitude;
-        }
         if (previous.profileImageUrl !== undefined) {
             profile.profileImageUrl = previous.profileImageUrl;
         } else {
@@ -649,16 +823,73 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
     response.json({ ok: true, data: profile });
 });
 
+app.post("/seller/location-request", authenticate, authorizeRole(["seller"]), async (request, response) => {
+    const schema = z.object({
+        shopLatitude: z.number().gte(-90).lte(90),
+        shopLongitude: z.number().gte(-180).lte(180),
+        note: z.string().max(500).optional()
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    const sellerId = request.authUserId as string;
+    const hasPending = [...db.sellerLocationRequests.values()].some(
+        (r) => r.sellerId === sellerId && r.status === "pending"
+    );
+    if (hasPending) {
+        response.status(409).json({
+            error: "You already have a pending shop location request. Wait for admin review."
+        });
+        return;
+    }
+    const profile = db.sellerProfiles.get(sellerId);
+    if (!profile) {
+        response.status(404).json({ error: "Seller profile not found" });
+        return;
+    }
+    const id = `slr-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const row: SellerLocationChangeRequest = {
+        id,
+        sellerId,
+        requestedLatitude: parsed.data.shopLatitude,
+        requestedLongitude: parsed.data.shopLongitude,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        ...(Number.isFinite(profile.shopLatitude) && Number.isFinite(profile.shopLongitude)
+            ? {
+                  previousLatitude: profile.shopLatitude as number,
+                  previousLongitude: profile.shopLongitude as number
+              }
+            : {}),
+        ...(parsed.data.note && parsed.data.note.trim().length > 0
+            ? { note: parsed.data.note.trim() }
+            : {})
+    };
+    try {
+        await persistSellerLocationChangeRequest(row);
+        db.sellerLocationRequests.set(id, row);
+        response.status(201).json({ data: row });
+    } catch (error) {
+        console.error("[seller/location-request]", error);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Failed to submit request"
+        });
+    }
+});
+
 app.get(
     "/seller/payment-methods",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const sellerId = request.authUserId as string;
         const data = [...db.sellerPaymentMethods.values()].filter(
             (entry) => entry.sellerId === sellerId
         );
-        response.json({ data });
+        const resolved = await withResolvedPaymentQrImages(data);
+        response.json({ data: resolved });
     }
 );
 
@@ -666,7 +897,7 @@ app.post(
     "/seller/payment-methods",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const schema = z.object({
             methodName: z.string().min(2).max(60),
             accountName: z.string().min(2).max(120),
@@ -685,10 +916,25 @@ app.post(
             methodName: parsed.data.methodName,
             accountName: parsed.data.accountName,
             accountNumber: parsed.data.accountNumber,
-            ...(parsed.data.qrImageUrl ? { qrImageUrl: parsed.data.qrImageUrl } : {})
+            ...(parsed.data.qrImageUrl
+                ? {
+                      qrImageUrl:
+                          normalizeVerificationDocsStoredUrl(parsed.data.qrImageUrl) ??
+                          parsed.data.qrImageUrl
+                  }
+                : {})
         };
         db.sellerPaymentMethods.set(id, row);
-        persistSellerPaymentMethod(row);
+        try {
+            await persistSellerPaymentMethod(row);
+        } catch (error) {
+            db.sellerPaymentMethods.delete(id);
+            console.error("[POST /seller/payment-methods]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to save payment method"
+            });
+            return;
+        }
         response.status(201).json({ data: row });
     }
 );
@@ -697,7 +943,7 @@ app.patch(
     "/seller/payment-methods/:id",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const id = z.string().min(1).parse(request.params.id);
         const row = db.sellerPaymentMethods.get(id);
         if (!row || row.sellerId !== request.authUserId) {
@@ -715,13 +961,24 @@ app.patch(
             response.status(400).json({ error: parsed.error.flatten() });
             return;
         }
+        const previous = { ...row };
         row.methodName = parsed.data.methodName ?? row.methodName;
         row.accountName = parsed.data.accountName ?? row.accountName;
         row.accountNumber = parsed.data.accountNumber ?? row.accountNumber;
         if (parsed.data.qrImageUrl) {
-            row.qrImageUrl = parsed.data.qrImageUrl;
+            row.qrImageUrl =
+                normalizeVerificationDocsStoredUrl(parsed.data.qrImageUrl) ?? parsed.data.qrImageUrl;
         }
-        persistSellerPaymentMethod(row);
+        try {
+            await persistSellerPaymentMethod(row);
+        } catch (error) {
+            db.sellerPaymentMethods.set(id, previous);
+            console.error("[PATCH /seller/payment-methods/:id]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to update payment method"
+            });
+            return;
+        }
         response.json({ data: row });
     }
 );
@@ -730,15 +987,23 @@ app.delete(
     "/seller/payment-methods/:id",
     authenticate,
     authorizeRole(["seller"]),
-    (request, response) => {
+    async (request, response) => {
         const id = z.string().min(1).parse(request.params.id);
         const row = db.sellerPaymentMethods.get(id);
         if (!row || row.sellerId !== request.authUserId) {
             response.status(404).json({ error: "Payment method not found" });
             return;
         }
+        try {
+            await deleteSellerPaymentMethod(id);
+        } catch (error) {
+            console.error("[DELETE /seller/payment-methods/:id]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to delete payment method"
+            });
+            return;
+        }
         db.sellerPaymentMethods.delete(id);
-        deleteSellerPaymentMethod(id);
         response.json({ ok: true });
     }
 );
@@ -833,12 +1098,199 @@ app.delete(
         db.users.delete(user.id);
         db.sellerProfiles.delete(user.id);
         db.sellerStatus.delete(user.id);
+        removeSellerLocationRequestsFromRuntime(user.id);
         for (const method of [...db.sellerPaymentMethods.values()]) {
             if (method.sellerId === user.id) {
                 db.sellerPaymentMethods.delete(method.id);
             }
         }
         response.json({ ok: true });
+    }
+);
+
+app.patch(
+    "/buyer/account/password",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response) => {
+        if (!isSupabaseAuthReady()) {
+            response.status(503).json({ error: "Password update requires Supabase Auth setup" });
+            return;
+        }
+        const schema = z.object({
+            currentPassword: z.string().min(8),
+            newPassword: z.string().min(8).max(128)
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const user = db.users.get(request.authUserId as string);
+        if (!user) {
+            response.status(404).json({ error: "User not found" });
+            return;
+        }
+        const anon = createSupabaseAnonClient();
+        const admin = createSupabaseAdminClient();
+        if (!anon || !admin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error: signErr } = await anon.auth.signInWithPassword({
+            email: user.email,
+            password: parsed.data.currentPassword
+        });
+        if (signErr) {
+            response.status(401).json({ error: "Current password is incorrect" });
+            return;
+        }
+        const { error: updateErr } = await admin.auth.admin.updateUserById(user.id, {
+            password: parsed.data.newPassword
+        });
+        if (updateErr) {
+            response.status(500).json({ error: updateErr.message });
+            return;
+        }
+        response.json({ ok: true });
+    }
+);
+
+app.delete(
+    "/buyer/account",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response) => {
+        if (!isSupabaseAuthReady()) {
+            response.status(503).json({ error: "Account deletion requires Supabase Auth setup" });
+            return;
+        }
+        const schema = z.object({ password: z.string().min(8) });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const user = db.users.get(request.authUserId as string);
+        if (!user) {
+            response.status(404).json({ error: "User not found" });
+            return;
+        }
+        const anon = createSupabaseAnonClient();
+        const admin = createSupabaseAdminClient();
+        if (!anon || !admin) {
+            response.status(503).json({ error: "Authentication service unavailable" });
+            return;
+        }
+        const { error: signErr } = await anon.auth.signInWithPassword({
+            email: user.email,
+            password: parsed.data.password
+        });
+        if (signErr) {
+            response.status(401).json({ error: "Password is incorrect" });
+            return;
+        }
+        const { error: deleteErr } = await admin.auth.admin.deleteUser(user.id);
+        if (deleteErr) {
+            response.status(500).json({ error: deleteErr.message });
+            return;
+        }
+        cleanupBuyerRuntimeStateAfterAuthDeletion(user.id);
+        response.json({ ok: true });
+    }
+);
+
+app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (request, response) => {
+    const schema = z.object({
+        fullName: z.string().min(2).max(120).optional(),
+        profileImageUrl: z.string().url().optional()
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    const buyerId = request.authUserId as string;
+    const user = db.users.get(buyerId);
+    if (!user || user.role !== "buyer") {
+        response.status(404).json({ error: "User not found" });
+        return;
+    }
+    const previousFullName = user.fullName;
+    const previousPic = user.profileImageUrl;
+    if (parsed.data.fullName !== undefined) {
+        user.fullName = parsed.data.fullName;
+    }
+    if (parsed.data.profileImageUrl !== undefined) {
+        user.profileImageUrl = parsed.data.profileImageUrl;
+    }
+    try {
+        if (isSupabaseAuthReady()) {
+            const supabase = createSupabaseAdminClient();
+            if (!supabase) {
+                throw new Error("Authentication service unavailable");
+            }
+            const { data: existing, error: getErr } = await supabase.auth.admin.getUserById(buyerId);
+            if (getErr || !existing.user) {
+                throw new Error(getErr?.message ?? "User not found in auth");
+            }
+            const meta: Record<string, unknown> = {
+                ...((existing.user.user_metadata ?? {}) as Record<string, unknown>),
+                role: user.role
+            };
+            if (parsed.data.fullName !== undefined) {
+                meta.full_name = parsed.data.fullName;
+            }
+            if (parsed.data.profileImageUrl !== undefined) {
+                meta.profile_image_url = parsed.data.profileImageUrl;
+            }
+            const { error: upErr } = await supabase.auth.admin.updateUserById(buyerId, {
+                user_metadata: meta
+            });
+            if (upErr) {
+                throw new Error(upErr.message);
+            }
+        }
+        db.users.set(buyerId, user);
+    } catch (error) {
+        if (previousFullName !== undefined) {
+            user.fullName = previousFullName;
+        } else {
+            delete user.fullName;
+        }
+        if (previousPic !== undefined) {
+            user.profileImageUrl = previousPic;
+        } else {
+            delete user.profileImageUrl;
+        }
+        console.error("[buyer/profile]", error);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Failed to update profile"
+        });
+        return;
+    }
+    response.json({ ok: true, data: user });
+});
+
+app.post(
+    "/buyer/assets/upload-url",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response) => {
+        const schema = z.object({
+            filename: z.string().min(3).max(255)
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const target = await generateVerificationUploadTarget(
+            request.authUserId as string,
+            parsed.data.filename,
+            "profile"
+        );
+        response.status(201).json(target);
     }
 );
 
@@ -887,6 +1339,43 @@ app.post(
         );
 
         response.status(201).json(target);
+    }
+);
+
+app.post(
+    "/seller/assets/read-url",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const schema = z.object({
+            path: z
+                .string()
+                .min(3)
+                .max(512)
+                .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid path")
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const sellerId = request.authUserId as string;
+        const prefix = `${sellerId}/`;
+        if (!parsed.data.path.startsWith(prefix)) {
+            response.status(403).json({ error: "Invalid asset path" });
+            return;
+        }
+
+        const canonicalUrl =
+            getVerificationDocsCanonicalUrl(parsed.data.path) ??
+            mockVerificationDocsAssetUrl(parsed.data.path);
+        const signed = await createSignedVerificationDownloadUrl(parsed.data.path, 60 * 60 * 24 * 7);
+        const readUrl = signed ?? canonicalUrl;
+
+        response.status(200).json({
+            readUrl,
+            canonicalUrl
+        });
     }
 );
 
@@ -1211,7 +1700,12 @@ app.get("/seller/analytics", authenticate, authorizeRole(["seller"]), (request, 
 
 app.get("/seller/products", authenticate, authorizeRole(["seller"]), (request, response) => {
     const sellerId = request.authUserId as string;
-    const data = [...db.products.values()].filter((row) => row.sellerId === sellerId);
+    const data = [...db.products.values()]
+        .filter((row) => row.sellerId === sellerId)
+        .map((row) => ({
+            ...row,
+            thumbnailUrl: firstProductThumbnailUrl(row.id)
+        }));
     response.json({ data });
 });
 
@@ -1225,7 +1719,8 @@ app.get("/seller/products/:id", authenticate, authorizeRole(["seller"]), (reques
     const media = [...db.productMedia.values()].filter((entry) => entry.productId === id);
     const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
     const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
-    response.json({ data: { ...product, media, options, rules } });
+    const reviewSummary = productReviewSummaryForProduct(id);
+    response.json({ data: { ...product, media, options, rules, reviewSummary } });
 });
 
 const createProductBodySchema = z
@@ -1506,7 +2001,86 @@ app.get("/products/:id", (_request, response) => {
     const media = [...db.productMedia.values()].filter((entry) => entry.productId === id);
     const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
     const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
-    response.json({ data: { ...product, media, options, rules } });
+    const reviewSummary = productReviewSummaryForProduct(id);
+    response.json({ data: { ...product, media, options, rules, reviewSummary } });
+});
+
+app.get("/products/:id/reviews", (request, response) => {
+    const productId = z.string().min(1).parse(request.params.id);
+    const product = db.products.get(productId);
+    if (!product || !product.isPublished) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    const rows = [...db.productReviews.values()]
+        .filter((r) => r.productId === productId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((r) => ({
+            id: r.id,
+            productId: r.productId,
+            buyerId: r.buyerId,
+            rating: r.rating,
+            body: r.body,
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+            authorLabel: reviewerDisplayLabel(r.buyerId)
+        }));
+    response.json({ data: rows });
+});
+
+app.post("/products/:id/reviews", authenticate, authorizeRole(["buyer"]), async (request, response) => {
+    const productId = z.string().min(1).parse(request.params.id);
+    const product = db.products.get(productId);
+    if (!product || !product.isPublished) {
+        response.status(404).json({ error: "Product not found" });
+        return;
+    }
+    const schema = z.object({
+        rating: z.number().int().min(1).max(5),
+        body: z.string().max(2000).optional().default("")
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    const buyerId = request.authUserId as string;
+    const existing = [...db.productReviews.values()].find(
+        (r) => r.productId === productId && r.buyerId === buyerId
+    );
+    const now = new Date().toISOString();
+    const review = existing
+        ? {
+              ...existing,
+              rating: parsed.data.rating,
+              body: parsed.data.body,
+              updatedAt: now
+          }
+        : {
+              id: `pr-${randomUUID()}`,
+              productId,
+              buyerId,
+              rating: parsed.data.rating,
+              body: parsed.data.body,
+              createdAt: now,
+              updatedAt: now
+          };
+    db.productReviews.set(review.id, review);
+    try {
+        await persistProductReview(review);
+    } catch (error) {
+        db.productReviews.delete(review.id);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Failed to save review"
+        });
+        return;
+    }
+    response.status(existing ? 200 : 201).json({
+        data: {
+            ...review,
+            authorLabel: reviewerDisplayLabel(buyerId)
+        }
+    });
 });
 
 app.delete("/products/:id", authenticate, authorizeRole(["seller"]), async (request, response) => {
@@ -1538,6 +2112,11 @@ app.delete("/products/:id", authenticate, authorizeRole(["seller"]), async (requ
     for (const rule of [...db.customizationRules.values()]) {
         if (rule.productId === id) {
             db.customizationRules.delete(rule.id);
+        }
+    }
+    for (const [rid, rev] of [...db.productReviews.entries()]) {
+        if (rev.productId === id) {
+            db.productReviews.delete(rid);
         }
     }
     deleteCustomizationOptionsByProduct(id);
@@ -2071,6 +2650,172 @@ app.post(
     }
 );
 
+app.get("/conversations", authenticate, authorizeRole(["buyer", "seller"]), (request, response) => {
+    const userId = request.authUserId as string;
+    const user = db.users.get(userId);
+    if (!user) {
+        response.status(401).json({ error: "Unauthorized" });
+        return;
+    }
+    const threads = [...db.conversations.values()].filter((c) =>
+        user.role === "buyer" ? c.buyerId === userId : c.sellerId === userId
+    );
+    const enriched = threads
+        .map((c) => {
+            const peerId = user.role === "buyer" ? c.sellerId : c.buyerId;
+            const peer = db.users.get(peerId);
+            const msgs = [...db.conversationMessages.values()]
+                .filter((m) => m.conversationId === c.id)
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            const last = msgs[0];
+            return {
+                id: c.id,
+                buyerId: c.buyerId,
+                sellerId: c.sellerId,
+                updatedAt: c.updatedAt,
+                peerId,
+                peerEmail: peer?.email ?? "",
+                lastMessagePreview: last?.body,
+                lastMessageAt: last?.createdAt
+            };
+        })
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    response.json({ data: enriched });
+});
+
+app.post("/conversations", authenticate, authorizeRole(["buyer", "seller"]), async (request, response) => {
+    const schema = z.object({
+        sellerId: z.string().min(1).optional(),
+        buyerId: z.string().min(1).optional()
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    const me = db.users.get(request.authUserId as string);
+    if (!me) {
+        response.status(401).json({ error: "Unauthorized" });
+        return;
+    }
+    let buyerId: string;
+    let sellerId: string;
+    if (me.role === "buyer") {
+        if (!parsed.data.sellerId) {
+            response.status(400).json({ error: "sellerId is required" });
+            return;
+        }
+        buyerId = me.id;
+        sellerId = parsed.data.sellerId;
+    } else {
+        if (!parsed.data.buyerId) {
+            response.status(400).json({ error: "buyerId is required" });
+            return;
+        }
+        buyerId = parsed.data.buyerId;
+        sellerId = me.id;
+    }
+    if (buyerId === sellerId) {
+        response.status(400).json({ error: "Invalid conversation" });
+        return;
+    }
+    const sellerUser = db.users.get(sellerId);
+    const buyerUser = db.users.get(buyerId);
+    if (!sellerUser || sellerUser.role !== "seller" || !buyerUser || buyerUser.role !== "buyer") {
+        response.status(400).json({ error: "Invalid buyer or seller" });
+        return;
+    }
+    const existing = findDirectConversation(buyerId, sellerId);
+    if (existing) {
+        response.json({ data: { id: existing.id, buyerId, sellerId, updatedAt: existing.updatedAt } });
+        return;
+    }
+    const id = `cv-${randomUUID()}`;
+    const updatedAt = new Date().toISOString();
+    const conv: ConversationRecord = { id, buyerId, sellerId, updatedAt };
+    db.conversations.set(id, conv);
+    try {
+        await persistConversation(conv);
+    } catch (error) {
+        db.conversations.delete(id);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Failed to create conversation"
+        });
+        return;
+    }
+    response.status(201).json({ data: { id, buyerId, sellerId, updatedAt } });
+});
+
+app.get("/conversations/:id/messages", authenticate, authorizeRole(["buyer", "seller"]), (request, response) => {
+    const conversationId = z.string().min(1).parse(request.params.id);
+    const conv = db.conversations.get(conversationId);
+    const user = db.users.get(request.authUserId as string);
+    if (!conv || !user) {
+        response.status(404).json({ error: "Not found" });
+        return;
+    }
+    if (conv.buyerId !== user.id && conv.sellerId !== user.id) {
+        response.status(403).json({ error: "Forbidden" });
+        return;
+    }
+    const messages = [...db.conversationMessages.values()]
+        .filter((m) => m.conversationId === conversationId)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    response.json({ data: messages });
+});
+
+app.post(
+    "/conversations/:id/messages",
+    authenticate,
+    authorizeRole(["buyer", "seller"]),
+    async (request, response) => {
+        const conversationId = z.string().min(1).parse(request.params.id);
+        const schema = z.object({
+            body: z.string().min(1).max(2000)
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const conv = db.conversations.get(conversationId);
+        const user = db.users.get(request.authUserId as string);
+        if (!conv || !user) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        if (conv.buyerId !== user.id && conv.sellerId !== user.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        const message = {
+            id: `dm-${randomUUID()}`,
+            conversationId,
+            senderId: user.id,
+            body: parsed.data.body,
+            createdAt: new Date().toISOString()
+        };
+        const previousUpdatedAt = conv.updatedAt;
+        db.conversationMessages.set(message.id, message);
+        conv.updatedAt = message.createdAt;
+        db.conversations.set(conversationId, conv);
+        try {
+            await persistConversationMessage(message);
+            await persistConversation(conv);
+        } catch (error) {
+            db.conversationMessages.delete(message.id);
+            conv.updatedAt = previousUpdatedAt;
+            db.conversations.set(conversationId, conv);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to save message"
+            });
+            return;
+        }
+        emitDirectMessage(message);
+        response.status(201).json({ data: message });
+    }
+);
+
 app.post(
     "/orders/:id/status",
     authenticate,
@@ -2201,15 +2946,127 @@ app.get("/admin/overview", authenticate, authorizeRole(["admin"]), (_request, re
     }
     const pendingVerifications = [...db.verifications.values()].filter((v) => v.status === "pending")
         .length;
+    const pendingLocationRequests = [...db.sellerLocationRequests.values()].filter(
+        (r) => r.status === "pending"
+    ).length;
     response.json({
         data: {
             pendingVerifications,
+            pendingLocationRequests,
             verifiedSellers,
             unverifiedSellers: sellers.length - verifiedSellers,
             totalSellers: sellers.length
         }
     });
 });
+
+app.get("/admin/location-requests", authenticate, authorizeRole(["admin"]), (request, response) => {
+    const statusQ = request.query.status;
+    const { page, limit } = parseListPagination(request.query);
+    const rows = [...db.sellerLocationRequests.values()]
+        .filter((entry) => (typeof statusQ === "string" ? entry.status === statusQ : true))
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+        .map((entry) => {
+            const seller = db.users.get(entry.sellerId);
+            const profile = db.sellerProfiles.get(entry.sellerId);
+            return {
+                ...entry,
+                seller: seller
+                    ? { id: seller.id, email: seller.email, fullName: seller.fullName }
+                    : null,
+                profile: profile
+                    ? {
+                          sellerId: profile.sellerId,
+                          businessName: profile.businessName,
+                          address: profile.address,
+                          shopLatitude: profile.shopLatitude,
+                          shopLongitude: profile.shopLongitude
+                      }
+                    : null
+            };
+        });
+    const { data, pagination } = slicePaginated(rows, page, limit);
+    response.json({ data, pagination });
+});
+
+app.post(
+    "/admin/location-requests/:id/approve",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const reqRow = db.sellerLocationRequests.get(id);
+        if (!reqRow || reqRow.status !== "pending") {
+            response.status(404).json({ error: "Pending request not found" });
+            return;
+        }
+        const profile = db.sellerProfiles.get(reqRow.sellerId);
+        if (!profile) {
+            response.status(404).json({ error: "Seller profile not found" });
+            return;
+        }
+        const previousLat = profile.shopLatitude;
+        const previousLng = profile.shopLongitude;
+        profile.shopLatitude = reqRow.requestedLatitude;
+        profile.shopLongitude = reqRow.requestedLongitude;
+        reqRow.status = "approved";
+        reqRow.reviewedAt = new Date().toISOString();
+        try {
+            await persistSellerProfile(profile);
+            await persistSellerLocationChangeRequest(reqRow);
+            response.json({ ok: true, data: { request: reqRow, profile } });
+        } catch (error) {
+            profile.shopLatitude = previousLat;
+            profile.shopLongitude = previousLng;
+            reqRow.status = "pending";
+            delete reqRow.reviewedAt;
+            console.error("[admin/location-requests/approve]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to approve"
+            });
+        }
+    }
+);
+
+app.post(
+    "/admin/location-requests/:id/reject",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const schema = z.object({ reason: z.string().max(500).optional() });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const reqRow = db.sellerLocationRequests.get(id);
+        if (!reqRow || reqRow.status !== "pending") {
+            response.status(404).json({ error: "Pending request not found" });
+            return;
+        }
+        const previousStatus = reqRow.status;
+        reqRow.status = "rejected";
+        reqRow.reviewedAt = new Date().toISOString();
+        if (parsed.data.reason?.trim()) {
+            reqRow.rejectionReason = parsed.data.reason.trim();
+        } else {
+            delete reqRow.rejectionReason;
+        }
+        try {
+            await persistSellerLocationChangeRequest(reqRow);
+            response.json({ ok: true, data: reqRow });
+        } catch (error) {
+            reqRow.status = previousStatus;
+            delete reqRow.reviewedAt;
+            delete reqRow.rejectionReason;
+            console.error("[admin/location-requests/reject]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to reject"
+            });
+        }
+    }
+);
 
 app.get("/admin/users", authenticate, authorizeRole(["admin"]), (request, response) => {
     const { page, limit } = parseListPagination(request.query);
@@ -2321,7 +3178,8 @@ app.post("/admin/users/:id/unsuspend", authenticate, authorizeRole(["admin"]), a
         id: user.id,
         email: user.email,
         role: user.role,
-        ...(user.fullName ? { fullName: user.fullName } : {})
+        ...(user.fullName ? { fullName: user.fullName } : {}),
+        ...(user.profileImageUrl ? { profileImageUrl: user.profileImageUrl } : {})
     };
     db.users.set(id, next);
     response.json({ ok: true });
@@ -2366,7 +3224,10 @@ app.get("/public/highlights", (_request, response) => {
     const publishedProducts = [...db.products.values()].filter((product) => product.isPublished);
     const featured = publishedProducts.filter((p) => p.isFeatured);
     const rest = publishedProducts.filter((p) => !p.isFeatured);
-    const topProducts = [...featured, ...rest].slice(0, 6);
+    const topProducts = [...featured, ...rest].slice(0, 6).map((p) => ({
+        ...p,
+        thumbnailUrl: firstProductThumbnailUrl(p.id)
+    }));
     const sellerCounter = new Map<string, number>();
     for (const product of publishedProducts) {
         sellerCounter.set(product.sellerId, (sellerCounter.get(product.sellerId) ?? 0) + 1);

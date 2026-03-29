@@ -3,8 +3,10 @@ export interface ApiError {
 }
 
 import type { AuthUser } from "./auth";
+import type { ConversationThread, DirectMessage } from "./messaging";
 import type { Order, OrderMessage } from "./order";
 import type { Product } from "./product";
+import type { ProductReview } from "./review";
 import type { AdminUserListItem, AdminVerificationItem } from "./admin";
 import type { ProductDetail, SellerPublicProfile } from "./product";
 import type { SellerPaymentMethod } from "./product";
@@ -26,6 +28,15 @@ export interface AuthLoginResponse {
   user: AuthUser;
 }
 
+export interface AuthMeResponse {
+  user: AuthUser | undefined;
+}
+
+export interface BuyerProfileUpdateResponse {
+  ok: boolean;
+  data: AuthUser;
+}
+
 export interface LandingHighlightsResponse {
   recommendedProducts: Product[];
   topSellers: Array<{
@@ -37,6 +48,26 @@ export interface LandingHighlightsResponse {
 
 export interface ProductDetailResponse {
   data: ProductDetail;
+}
+
+export interface ProductReviewsResponse {
+  data: ProductReview[];
+}
+
+export interface PostProductReviewResponse {
+  data: ProductReview;
+}
+
+export interface ConversationsListResponse {
+  data: ConversationThread[];
+}
+
+export interface ConversationCreateResponse {
+  data: { id: string; buyerId: string; sellerId: string; updatedAt: string };
+}
+
+export interface DirectMessagesResponse {
+  data: DirectMessage[];
 }
 
 export interface SellerProfileResponse {
@@ -143,4 +174,10 @@ export interface VerificationUploadTarget {
   publicUrl?: string;
   expiresIn: number;
   provider: "supabase" | "mock";
+}
+
+/** After PUT to uploadUrl, use readUrl for display and canonicalUrl for PATCH / DB. */
+export interface SellerAssetReadUrlResponse {
+  readUrl: string;
+  canonicalUrl: string;
 }

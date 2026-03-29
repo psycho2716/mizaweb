@@ -22,7 +22,7 @@ export function PublicFooter() {
                         </p>
                         <p className="max-w-xs text-sm leading-relaxed text-(--muted)">
                             Hand-finished stone goods—sculptures, kitchen pieces, décor, and
-                            accessories—from verified Filipino artisans. Shop in PHP, message
+                            accessories—from verified Filipino artisans. Shop in ₱, message
                             sellers, and checkout in one place.
                         </p>
                     </div>

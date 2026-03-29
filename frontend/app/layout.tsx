@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
     title: getAppName(),
-    description: "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts in PHP."
+    description: "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts priced in ₱."
 };
 
 export default function RootLayout({

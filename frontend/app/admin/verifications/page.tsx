@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight } from "lucide-react";
+import Link from "next/link";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AdminConsoleShell } from "@/components/admin/admin-console-shell";
@@ -89,8 +90,8 @@ export default function AdminVerificationsPage() {
         } catch {
             setQueue([]);
             setPagination(null);
-            setQueueError("Could not load verification queue.");
-            toast.error("Could not load verification queue.");
+            setQueueError("Could not load pending permits.");
+            toast.error("Could not load pending permits.");
             return false;
         } finally {
             setQueueLoading(false);
@@ -125,8 +126,8 @@ export default function AdminVerificationsPage() {
         const entry = queue.find((e) => e.id === id);
         const label = entry?.profile?.businessName ?? entry?.seller?.email ?? id;
         const ok = await requestConfirm({
-            title: "Approve seller verification?",
-            description: "This marks the seller as verified.",
+            title: "Approve this seller?",
+            description: "They’ll be able to show products on the store.",
             confirmLabel: "Approve"
         });
         if (!ok) return;
@@ -135,7 +136,7 @@ export default function AdminVerificationsPage() {
             toast.success(`Approved ${label}`);
             await refreshAll();
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Approve failed");
+            toast.error(error instanceof Error ? error.message : "Could not approve");
         }
     }
 
@@ -148,7 +149,7 @@ export default function AdminVerificationsPage() {
             const message =
                 error instanceof Error
                     ? error.message
-                    : "Could not open permit document. Check storage and backend configuration.";
+                    : "Could not open the permit file. Try again or check server settings.";
             toast.error(message);
         }
     }
@@ -156,21 +157,21 @@ export default function AdminVerificationsPage() {
     async function handleReject(id: string) {
         const reason = rejectReasonById[id]?.trim();
         if (!reason) {
-            toast.error("Rejection reason is required.");
+            toast.error("Please add a short note for the seller before declining.");
             return;
         }
         const entry = queue.find((e) => e.id === id);
         const label = entry?.profile?.businessName ?? entry?.seller?.email ?? id;
         const ok = await requestConfirm({
-            title: "Reject this verification?",
-            description: "The seller can submit a new permit after rejection.",
-            confirmLabel: "Reject",
+            title: "Decline this permit?",
+            description: "The seller can upload a new permit after you decline.",
+            confirmLabel: "Decline",
             destructive: true
         });
         if (!ok) return;
         try {
             await rejectVerification(id, reason);
-            toast.success(`Rejected — seller can resubmit: ${label}`);
+            toast.success(`Declined — seller can try again: ${label}`);
             setRejectReasonById((p) => {
                 const next = { ...p };
                 delete next[id];
@@ -178,7 +179,7 @@ export default function AdminVerificationsPage() {
             });
             await refreshAll();
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Reject failed");
+            toast.error(error instanceof Error ? error.message : "Could not decline");
         }
     }
 
@@ -192,24 +193,36 @@ export default function AdminVerificationsPage() {
             <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
                 <div className="grid gap-3 sm:grid-cols-3">
                     <StatCard
-                        label="Pending verifications"
+                        label="Permits to review"
                         value={pending}
-                        hint={pending ? "Awaiting review" : "Queue is clear"}
+                        hint={pending ? "Waiting for staff review" : "You’re all caught up"}
                         hintTone={pending ? "accent" : "muted"}
                     />
                     <StatCard
                         label="Verified sellers"
                         value={verified}
-                        hint="Approved business verification"
+                        hint="Approved business permits"
                         hintTone="muted"
                     />
                     <StatCard
-                        label="Unverified sellers"
+                        label="Sellers not fully approved"
                         value={unverified}
-                        hint="Not yet approved (includes pending / rejected / no submission)"
+                        hint="Waiting, declined, or no permit uploaded yet"
                         hintTone="warn"
                     />
                 </div>
+
+                {overview && overview.pendingLocationRequests > 0 ? (
+                    <p className="text-sm">
+                        <Link
+                            href="/admin/location-requests"
+                            className="font-medium text-(--accent) underline-offset-2 hover:underline"
+                        >
+                            {overview.pendingLocationRequests} shop location request
+                            {overview.pendingLocationRequests === 1 ? "" : "s"} need review
+                        </Link>
+                    </p>
+                ) : null}
 
                 {overviewError ? (
                     <p className="text-xs text-amber-400/90">{overviewError}</p>
@@ -219,11 +232,11 @@ export default function AdminVerificationsPage() {
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--border) px-4 py-4 md:px-5">
                         <div>
                             <h2 className="text-lg font-semibold text-foreground">
-                                Verification requests
+                                Pending seller permits
                             </h2>
                             <p className="text-xs text-(--muted)">
                                 {queueError ||
-                                    "Open the permit, then approve or reject with a reason for resubmission."}
+                                    "Open the document, then approve it or explain what needs to change."}
                             </p>
                         </div>
                         <button
@@ -239,7 +252,7 @@ export default function AdminVerificationsPage() {
                     <div>
                         {queueLoading && queue.length === 0 ? (
                             <div className="px-5 py-12 text-center text-sm text-(--muted)">
-                                Loading queue…
+                                Loading…
                             </div>
                         ) : queue.length === 0 ? (
                             <div className="px-5 py-12 text-center text-sm text-(--muted)">
@@ -302,12 +315,12 @@ export default function AdminVerificationsPage() {
                                                             void openPermitDocument(entry.id)
                                                         }
                                                     >
-                                                        View permit
+                                                        Open permit
                                                     </Button>
                                                     <Button
                                                         type="button"
                                                         size="sm"
-                                                        className="h-8 bg-(--accent) text-xs font-semibold uppercase tracking-wide text-[#031018] hover:brightness-110"
+                                                        className="h-8 bg-(--accent) text-xs font-semibold tracking-wide text-[#031018] hover:brightness-110"
                                                         onClick={() =>
                                                             void handleApprove(entry.id)
                                                         }
@@ -418,12 +431,12 @@ export default function AdminVerificationsPage() {
                                                                     )
                                                                 }
                                                             >
-                                                                View permit
+                                                                Open permit
                                                             </Button>
                                                             <Button
                                                                 type="button"
                                                                 size="sm"
-                                                                className="h-8 bg-(--accent) text-xs font-semibold uppercase tracking-wide text-[#031018] hover:brightness-110"
+                                                                className="h-8 bg-(--accent) text-xs font-semibold tracking-wide text-[#031018] hover:brightness-110"
                                                                 onClick={() =>
                                                                     void handleApprove(entry.id)
                                                                 }

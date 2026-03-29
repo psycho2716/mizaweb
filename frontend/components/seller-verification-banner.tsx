@@ -98,7 +98,7 @@ export function SellerVerificationBanner() {
     if (phase === "loading") {
         return (
             <div className="border-b border-(--border) bg-(--surface) px-4 py-2 text-center text-xs text-(--muted)">
-                Checking verification status…
+                Checking your account status…
             </div>
         );
     }
@@ -116,7 +116,7 @@ export function SellerVerificationBanner() {
                 <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2 text-sm text-red-100">
                         <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
-                        <span>Could not load verification status.</span>
+                        <span>Could not load your account status.</span>
                     </div>
                     <Button
                         type="button"
@@ -144,10 +144,10 @@ export function SellerVerificationBanner() {
                         <Clock className="h-5 w-5" aria-hidden />
                     </span>
                     <div className="min-w-0 flex-1 space-y-1 text-sm text-amber-100">
-                        <p className="font-semibold">Verification pending</p>
+                        <p className="font-semibold">We&apos;re reviewing your documents</p>
                         <p className="text-amber-100/90">
-                            Your business permit is being reviewed. You cannot publish listings until
-                            an administrator approves your account.
+                            Your business permit is being checked. You can&apos;t put products on the
+                            store until our team approves your account.
                         </p>
                     </div>
                 </div>
@@ -162,14 +162,14 @@ export function SellerVerificationBanner() {
                     <div className="flex items-start gap-3">
                         <XCircle className="h-6 w-6 shrink-0 text-red-300" aria-hidden />
                         <div className="min-w-0 space-y-1 text-sm text-red-50">
-                            <p className="font-semibold">Verification not approved</p>
+                            <p className="font-semibold">Your documents weren&apos;t approved</p>
                             {rejectionReason ? (
                                 <p>
-                                    <span className="font-medium">Admin note: </span>
+                                    <span className="font-medium">Note from our team: </span>
                                     {rejectionReason}
                                 </p>
                             ) : (
-                                <p>Please submit a new legal business document for review.</p>
+                                <p>Please upload a new business permit for us to review.</p>
                             )}
                             <p className="text-red-100/85">
                                 Upload a clear PDF or image of your business permit below.
@@ -187,7 +187,7 @@ export function SellerVerificationBanner() {
                             />
                         </div>
                         <div className="space-y-1.5">
-                            <Label htmlFor="seller-banner-note">Note to reviewer (optional)</Label>
+                            <Label htmlFor="seller-banner-note">Message for our team (optional)</Label>
                             <Textarea
                                 id="seller-banner-note"
                                 rows={2}
@@ -217,9 +217,10 @@ export function SellerVerificationBanner() {
                 <div className="flex items-start gap-3">
                     <AlertCircle className="h-6 w-6 shrink-0 text-amber-200" aria-hidden />
                     <div className="min-w-0 space-y-1 text-sm text-amber-100">
-                        <p className="font-semibold">Verification required</p>
+                        <p className="font-semibold">We need your business permit</p>
                         <p>
-                            Submit a legal business permit (PDF or image) to sell on this marketplace.
+                            Upload a PDF or photo of your business permit so you can sell on this
+                            marketplace.
                         </p>
                     </div>
                 </div>
@@ -248,7 +249,7 @@ export function SellerVerificationBanner() {
                         onClick={() => void handleSubmitResubmit(false)}
                         className="w-fit"
                     >
-                        {submitting ? "Submitting…" : "Submit for verification"}
+                        {submitting ? "Submitting…" : "Submit for review"}
                     </Button>
                 </div>
             </div>

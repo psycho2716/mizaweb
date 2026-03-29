@@ -1,18 +1,29 @@
 import { apiFetch } from "@/lib/api/client";
 import type {
+    AdminLocationRequestItem,
     AdminOverviewData,
     AdminUserDetailData,
     AuthLoginResponse,
+    AuthMeResponse,
+    BuyerProfileUpdateResponse,
     CartResponse,
     CheckoutResponse,
+    ConversationCreateResponse,
+    ConversationsListResponse,
+    DirectMessage,
+    DirectMessagesResponse,
     LandingHighlightsResponse,
     OrdersResponse,
     OrderMessagesResponse,
+    PostProductReviewResponse,
     ProductDetailResponse,
     ProductCreateResponse,
+    ProductReviewsResponse,
     ProductsResponse,
     SellerAnalyticsResponse,
     SellerPaymentMethodsResponse,
+    ListPaginationMeta,
+    SellerLocationChangeRequest,
     SellerPublicProfile,
     SellerProfileResponse,
     SellerProductCreateInput,
@@ -21,6 +32,7 @@ import type {
     VerificationQueueResponse,
     VerificationStatusResponse,
     VerificationSubmitResponse,
+    SellerAssetReadUrlResponse,
     VerificationUploadTarget
 } from "@/types";
 
@@ -29,6 +41,10 @@ export function loginWithEmailPassword(email: string, password: string) {
         method: "POST",
         body: JSON.stringify({ email, password })
     });
+}
+
+export function getAuthMe() {
+    return apiFetch<AuthMeResponse>("/auth/me");
 }
 
 export function registerAccount(
@@ -98,6 +114,13 @@ export function createSellerAssetUploadUrl(
     return apiFetch<VerificationUploadTarget>("/seller/assets/upload-url", {
         method: "POST",
         body: JSON.stringify({ filename, kind })
+    });
+}
+
+export function signSellerAssetReadUrl(path: string) {
+    return apiFetch<SellerAssetReadUrlResponse>("/seller/assets/read-url", {
+        method: "POST",
+        body: JSON.stringify({ path })
     });
 }
 
@@ -195,6 +218,39 @@ export function getLandingHighlights() {
 
 export function getProductDetail(productId: string) {
     return apiFetch<ProductDetailResponse>(`/products/${productId}`);
+}
+
+export function getProductReviews(productId: string) {
+    return apiFetch<ProductReviewsResponse>(`/products/${productId}/reviews`);
+}
+
+export function postProductReview(productId: string, rating: number, body: string) {
+    return apiFetch<PostProductReviewResponse>(`/products/${productId}/reviews`, {
+        method: "POST",
+        body: JSON.stringify({ rating, body })
+    });
+}
+
+export function listConversations() {
+    return apiFetch<ConversationsListResponse>("/conversations");
+}
+
+export function createConversation(payload: { sellerId?: string; buyerId?: string }) {
+    return apiFetch<ConversationCreateResponse>("/conversations", {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
+}
+
+export function getDirectMessages(conversationId: string) {
+    return apiFetch<DirectMessagesResponse>(`/conversations/${conversationId}/messages`);
+}
+
+export function sendDirectMessage(conversationId: string, body: string) {
+    return apiFetch<{ data: DirectMessage }>(`/conversations/${conversationId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ body })
+    });
 }
 
 export function getSellerPublicProfile(sellerId: string) {
@@ -375,6 +431,46 @@ export function updateSellerProfile(payload: {
     });
 }
 
+export function submitSellerLocationRequest(payload: {
+    shopLatitude: number;
+    shopLongitude: number;
+    note?: string;
+}) {
+    return apiFetch<{ data: SellerLocationChangeRequest }>("/seller/location-request", {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
+}
+
+export function listAdminLocationRequests(params?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+}) {
+    const search = new URLSearchParams();
+    if (params?.page !== undefined) search.set("page", String(params.page));
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.status) search.set("status", params.status);
+    const qs = search.toString();
+    return apiFetch<{ data: AdminLocationRequestItem[]; pagination: ListPaginationMeta }>(
+        `/admin/location-requests${qs ? `?${qs}` : ""}`
+    );
+}
+
+export function approveAdminLocationRequest(id: string) {
+    return apiFetch<{ ok: boolean; data: unknown }>(`/admin/location-requests/${id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({})
+    });
+}
+
+export function rejectAdminLocationRequest(id: string, reason?: string) {
+    return apiFetch<{ ok: boolean; data: unknown }>(`/admin/location-requests/${id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ ...(reason?.trim() ? { reason: reason.trim() } : {}) })
+    });
+}
+
 export function getSellerPaymentMethods() {
     return apiFetch<SellerPaymentMethodsResponse>("/seller/payment-methods");
 }
@@ -400,16 +496,22 @@ export function updateSellerPaymentMethod(
         qrImageUrl: string;
     }>
 ) {
-    return apiFetch<{ data: { id: string } }>(`/seller/payment-methods/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify(payload)
-    });
+    return apiFetch<{ data: { id: string } }>(
+        `/seller/payment-methods/${encodeURIComponent(id)}`,
+        {
+            method: "PATCH",
+            body: JSON.stringify(payload)
+        }
+    );
 }
 
 export function deleteSellerPaymentMethod(id: string) {
-    return apiFetch<{ ok: boolean }>(`/seller/payment-methods/${id}`, {
-        method: "DELETE"
-    });
+    return apiFetch<{ ok: boolean }>(
+        `/seller/payment-methods/${encodeURIComponent(id)}`,
+        {
+            method: "DELETE"
+        }
+    );
 }
 
 export function updateSellerPassword(currentPassword: string, newPassword: string) {
@@ -423,5 +525,33 @@ export function deleteSellerAccount(password: string) {
     return apiFetch<{ ok: boolean }>("/seller/account", {
         method: "DELETE",
         body: JSON.stringify({ password })
+    });
+}
+
+export function updateBuyerPassword(currentPassword: string, newPassword: string) {
+    return apiFetch<{ ok: boolean }>("/buyer/account/password", {
+        method: "PATCH",
+        body: JSON.stringify({ currentPassword, newPassword })
+    });
+}
+
+export function deleteBuyerAccount(password: string) {
+    return apiFetch<{ ok: boolean }>("/buyer/account", {
+        method: "DELETE",
+        body: JSON.stringify({ password })
+    });
+}
+
+export function updateBuyerProfile(payload: { fullName?: string; profileImageUrl?: string }) {
+    return apiFetch<BuyerProfileUpdateResponse>("/buyer/profile", {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+    });
+}
+
+export function createBuyerAssetUploadUrl(filename: string) {
+    return apiFetch<VerificationUploadTarget>("/buyer/assets/upload-url", {
+        method: "POST",
+        body: JSON.stringify({ filename })
     });
 }

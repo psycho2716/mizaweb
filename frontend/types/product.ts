@@ -1,3 +1,5 @@
+import type { ProductReviewSummary } from "./review";
+
 export interface Product {
   id: string;
   sellerId: string;
@@ -5,6 +7,8 @@ export interface Product {
   description: string;
   basePrice: number;
   isPublished: boolean;
+  /** First listing image URL when returned from seller product list API. */
+  thumbnailUrl?: string;
   model3dUrl?: string;
   /** Buyer-specific production; when true, `stockQuantity` is not used. */
   madeToOrder?: boolean;
@@ -39,6 +43,7 @@ export interface ProductDetail extends Product {
   media: ProductMedia[];
   options: ProductOption[];
   rules: ProductRule[];
+  reviewSummary: ProductReviewSummary;
 }
 
 /** Payload for POST `/products` (seller create listing). */
@@ -59,6 +64,22 @@ export interface SellerProductCreateInput {
 /** Payload for PATCH `/products/:id`. */
 export type SellerProductPatchInput = Partial<SellerProductCreateInput>;
 
+export type SellerLocationRequestStatus = "pending" | "approved" | "rejected";
+
+export interface SellerLocationChangeRequest {
+  id: string;
+  sellerId: string;
+  requestedLatitude: number;
+  requestedLongitude: number;
+  previousLatitude?: number;
+  previousLongitude?: number;
+  note?: string;
+  status: SellerLocationRequestStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  rejectionReason?: string;
+}
+
 export interface SellerPublicProfile {
   id: string;
   email: string;
@@ -72,9 +93,14 @@ export interface SellerPublicProfile {
   shopLongitude?: number;
   verificationStatus: string;
   publishedProducts: number;
+  /** Average star rating across all published products (null when no reviews). */
+  averageRating?: number | null;
+  reviewCount?: number;
   profileImageUrl?: string;
   storeBackgroundUrl?: string;
   paymentMethods: SellerPaymentMethod[];
+  /** Set when the seller is waiting for admin to approve a new map pin. */
+  pendingLocationRequest?: SellerLocationChangeRequest | null;
 }
 
 export interface SellerPaymentMethod {

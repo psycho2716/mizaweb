@@ -3,12 +3,16 @@ import { db } from "../../lib/store";
 import type {
     AuthUser,
     CartItem,
+    ConversationMessageRecord,
+    ConversationRecord,
     CustomizationOption,
     CustomizationRule,
     OrderRecord,
     OrderMessage,
     ProductMedia,
     ProductRecord,
+    ProductReviewRecord,
+    SellerLocationChangeRequest,
     SellerProfile,
     SellerPaymentMethod,
     UserRole,
@@ -33,6 +37,7 @@ function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
     }
     const suspended =
         isAuthUserBanned(u) || u.user_metadata?.suspended === true || u.user_metadata?.suspended === "true";
+    const metaPic = u.user_metadata?.profile_image_url ?? u.user_metadata?.avatar_url;
     return {
         id: u.id,
         email: u.email ?? "",
@@ -40,6 +45,7 @@ function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
         ...(u.user_metadata?.full_name
             ? { fullName: String(u.user_metadata.full_name) }
             : {}),
+        ...(metaPic ? { profileImageUrl: String(metaPic) } : {}),
         ...(suspended ? { suspended: true } : {})
     };
 }
@@ -115,6 +121,20 @@ interface VerificationRow {
     rejection_reason: string | null;
 }
 
+interface SellerLocationRequestRow {
+    id: string;
+    seller_id: string;
+    requested_latitude: number;
+    requested_longitude: number;
+    previous_latitude: number | null;
+    previous_longitude: number | null;
+    note: string | null;
+    status: "pending" | "approved" | "rejected";
+    created_at: string;
+    reviewed_at: string | null;
+    rejection_reason: string | null;
+}
+
 interface ProductRow {
     id: string;
     seller_id: string;
@@ -179,6 +199,31 @@ interface OrderMessageRow {
     created_at: string;
 }
 
+interface ProductReviewRow {
+    id: string;
+    product_id: string;
+    buyer_id: string;
+    rating: number;
+    body: string;
+    created_at: string;
+    updated_at: string;
+}
+
+interface ConversationRow {
+    id: string;
+    buyer_id: string;
+    seller_id: string;
+    updated_at: string;
+}
+
+interface ConversationMessageRow {
+    id: string;
+    conversation_id: string;
+    sender_id: string;
+    body: string;
+    created_at: string;
+}
+
 const SYNC_TTL_MS = 1000;
 let lastSyncAt = 0;
 let syncInFlight: Promise<void> | null = null;
@@ -203,7 +248,11 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         ruleRes,
         cartRes,
         orderRes,
-        messageRes
+        messageRes,
+        productReviewsRes,
+        conversationsRes,
+        conversationMessagesRes,
+        locationRequestRes
     ] = await Promise.all([
         supabase.from("app_seller_status").select("*"),
         supabase.from("app_verifications").select("*"),
@@ -215,7 +264,11 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         supabase.from("app_customization_rules").select("*"),
         supabase.from("app_cart_items").select("*"),
         supabase.from("app_orders").select("*"),
-        supabase.from("app_order_messages").select("*")
+        supabase.from("app_order_messages").select("*"),
+        supabase.from("app_product_reviews").select("*"),
+        supabase.from("app_conversations").select("*"),
+        supabase.from("app_conversation_messages").select("*"),
+        supabase.from("app_seller_location_requests").select("*")
     ]);
 
     await loadAuthUsersIntoRuntime(supabase);
@@ -276,6 +329,27 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 ...(row.rejection_reason ? { rejectionReason: row.rejection_reason } : {})
             };
             db.verifications.set(row.id, value);
+        }
+    }
+
+    if (locationRequestRes.data) {
+        db.sellerLocationRequests.clear();
+        for (const row of locationRequestRes.data as SellerLocationRequestRow[]) {
+            const value: SellerLocationChangeRequest = {
+                id: row.id,
+                sellerId: row.seller_id,
+                requestedLatitude: row.requested_latitude,
+                requestedLongitude: row.requested_longitude,
+                status: row.status,
+                createdAt: row.created_at,
+                ...(row.previous_latitude != null && row.previous_longitude != null
+                    ? { previousLatitude: row.previous_latitude, previousLongitude: row.previous_longitude }
+                    : {}),
+                ...(row.note ? { note: row.note } : {}),
+                ...(row.reviewed_at ? { reviewedAt: row.reviewed_at } : {}),
+                ...(row.rejection_reason ? { rejectionReason: row.rejection_reason } : {})
+            };
+            db.sellerLocationRequests.set(row.id, value);
         }
     }
 
@@ -378,6 +452,49 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         }
     }
 
+    if (productReviewsRes.data) {
+        db.productReviews.clear();
+        for (const row of productReviewsRes.data as ProductReviewRow[]) {
+            const review: ProductReviewRecord = {
+                id: row.id,
+                productId: row.product_id,
+                buyerId: row.buyer_id,
+                rating: row.rating,
+                body: row.body,
+                createdAt: row.created_at,
+                updatedAt: row.updated_at
+            };
+            db.productReviews.set(row.id, review);
+        }
+    }
+
+    if (conversationsRes.data) {
+        db.conversations.clear();
+        for (const row of conversationsRes.data as ConversationRow[]) {
+            const conv: ConversationRecord = {
+                id: row.id,
+                buyerId: row.buyer_id,
+                sellerId: row.seller_id,
+                updatedAt: row.updated_at
+            };
+            db.conversations.set(row.id, conv);
+        }
+    }
+
+    if (conversationMessagesRes.data) {
+        db.conversationMessages.clear();
+        for (const row of conversationMessagesRes.data as ConversationMessageRow[]) {
+            const msg: ConversationMessageRecord = {
+                id: row.id,
+                conversationId: row.conversation_id,
+                senderId: row.sender_id,
+                body: row.body,
+                createdAt: row.created_at
+            };
+            db.conversationMessages.set(row.id, msg);
+        }
+    }
+
     lastSyncAt = Date.now();
 }
 
@@ -446,10 +563,12 @@ export async function persistSellerProfile(profile: SellerProfile): Promise<void
     }
 }
 
-export function persistSellerPaymentMethod(row: SellerPaymentMethod): void {
+export async function persistSellerPaymentMethod(row: SellerPaymentMethod): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_seller_payment_methods").upsert(
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_seller_payment_methods").upsert(
         {
             id: row.id,
             seller_id: row.sellerId,
@@ -460,12 +579,22 @@ export function persistSellerPaymentMethod(row: SellerPaymentMethod): void {
         },
         { onConflict: "id" }
     );
+    if (error) {
+        console.error("[persistSellerPaymentMethod]", error.message);
+        throw new Error(`Failed to persist payment method: ${error.message}`);
+    }
 }
 
-export function deleteSellerPaymentMethod(id: string): void {
+export async function deleteSellerPaymentMethod(id: string): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_seller_payment_methods").delete().eq("id", id);
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_seller_payment_methods").delete().eq("id", id);
+    if (error) {
+        console.error("[deleteSellerPaymentMethod]", error.message);
+        throw new Error(`Failed to delete payment method: ${error.message}`);
+    }
 }
 
 export async function persistVerification(row: VerificationSubmission): Promise<void> {
@@ -505,6 +634,43 @@ export function deleteSellerStatusBySellerId(sellerId: string): void {
     const supabase = createSupabaseAdminClient();
     if (!supabase) return;
     void supabase.from("app_seller_status").delete().eq("seller_id", sellerId);
+}
+
+export async function persistSellerLocationChangeRequest(
+    row: SellerLocationChangeRequest
+): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_seller_location_requests").upsert(
+        {
+            id: row.id,
+            seller_id: row.sellerId,
+            requested_latitude: row.requestedLatitude,
+            requested_longitude: row.requestedLongitude,
+            previous_latitude: row.previousLatitude ?? null,
+            previous_longitude: row.previousLongitude ?? null,
+            note: row.note ?? null,
+            status: row.status,
+            created_at: row.createdAt,
+            reviewed_at: row.reviewedAt ?? null,
+            rejection_reason: row.rejectionReason ?? null
+        },
+        { onConflict: "id" }
+    );
+    if (error) {
+        console.error("[persistSellerLocationChangeRequest]", error.message);
+        throw new Error(`Failed to persist location request: ${error.message}`);
+    }
+}
+
+export function deleteSellerLocationRequestsBySellerId(sellerId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    void supabase.from("app_seller_location_requests").delete().eq("seller_id", sellerId);
 }
 
 /**
@@ -691,4 +857,68 @@ export function persistOrderMessage(row: OrderMessage): void {
         },
         { onConflict: "id" }
     );
+}
+
+export async function persistProductReview(row: ProductReviewRecord): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_product_reviews").upsert(
+        {
+            id: row.id,
+            product_id: row.productId,
+            buyer_id: row.buyerId,
+            rating: row.rating,
+            body: row.body,
+            created_at: row.createdAt,
+            updated_at: row.updatedAt
+        },
+        { onConflict: "id" }
+    );
+    if (error) {
+        console.error("[persistProductReview]", error.message);
+        throw new Error(`Failed to persist product review: ${error.message}`);
+    }
+}
+
+export async function persistConversation(row: ConversationRecord): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_conversations").upsert(
+        {
+            id: row.id,
+            buyer_id: row.buyerId,
+            seller_id: row.sellerId,
+            updated_at: row.updatedAt
+        },
+        { onConflict: "id" }
+    );
+    if (error) {
+        console.error("[persistConversation]", error.message);
+        throw new Error(`Failed to persist conversation: ${error.message}`);
+    }
+}
+
+export async function persistConversationMessage(row: ConversationMessageRecord): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_conversation_messages").upsert(
+        {
+            id: row.id,
+            conversation_id: row.conversationId,
+            sender_id: row.senderId,
+            body: row.body,
+            created_at: row.createdAt
+        },
+        { onConflict: "id" }
+    );
+    if (error) {
+        console.error("[persistConversationMessage]", error.message);
+        throw new Error(`Failed to persist direct message: ${error.message}`);
+    }
 }

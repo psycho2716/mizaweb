@@ -1,11 +1,12 @@
 /* eslint-disable @next/next/no-assign-module-variable */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { checkoutCart, getOrderMessages, getOrders, sendOrderMessage } from "@/lib/api/endpoints";
+import { formatPeso } from "@/lib/utils";
 import type { Order, OrderMessage } from "@/types";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -21,6 +22,8 @@ export default function BuyerOrdersPage() {
     const [activeOrderId, setActiveOrderId] = useState("");
     const [messages, setMessages] = useState<OrderMessage[]>([]);
     const [messageInput, setMessageInput] = useState("");
+    const activeOrderIdRef = useRef(activeOrderId);
+    activeOrderIdRef.current = activeOrderId;
 
     const sortedOrders = useMemo(
         () => [...orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -70,6 +73,9 @@ export default function BuyerOrdersPage() {
             });
         });
         socket.on("chat:message", (message: OrderMessage) => {
+            if (message.orderId !== activeOrderIdRef.current) {
+                return;
+            }
             setMessages((previous) => {
                 if (previous.some((entry) => entry.id === message.id)) {
                     return previous;
@@ -171,7 +177,7 @@ export default function BuyerOrdersPage() {
                             <p className="mt-1 font-medium text-foreground">Status: {order.status}</p>
                             <p className="text-(--muted)">Payment: {order.paymentMethod}</p>
                             <p className="font-semibold text-(--accent)">
-                                PHP {order.totalAmount.toLocaleString()}
+                                {formatPeso(order.totalAmount)}
                             </p>
                             <p className="text-xs text-(--muted)">
                                 {new Date(order.createdAt).toLocaleString()}

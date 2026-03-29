@@ -13,3 +13,13 @@ export function getAppName(): string {
 export function getGoogleMapsBrowserApiKey(): string {
     return process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() ?? "";
 }
+
+/** Philippine peso for UI: peso sign (₱) + formatted amount. */
+export function formatPeso(amount: number, options?: Intl.NumberFormatOptions): string {
+    const merged: Intl.NumberFormatOptions = {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+        ...options
+    };
+    return `₱${amount.toLocaleString("en-PH", merged)}`;
+}

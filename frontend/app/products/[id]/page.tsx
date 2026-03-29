@@ -18,7 +18,15 @@ export default async function ProductDetailPage({
     );
   }
   const payload = (await response.json()) as ProductDetailResponse;
-  const product = payload.data;
+  const product = payload.data
+    ? {
+        ...payload.data,
+        reviewSummary: payload.data.reviewSummary ?? {
+          averageRating: null as number | null,
+          reviewCount: 0
+        }
+      }
+    : null;
 
   if (!product) {
     return (

@@ -97,6 +97,13 @@ export default function AdminUsersPage() {
   }
 
   async function onSuspend(id: string) {
+    const ok = await requestConfirm({
+      title: "Suspend this account?",
+      description: "They will be blocked from signing in until you lift the suspension.",
+      confirmLabel: "Suspend",
+      destructive: true
+    });
+    if (!ok) return;
     try {
       await suspendAdminUser(id);
       toast.success("Account suspended.");
@@ -110,6 +117,12 @@ export default function AdminUsersPage() {
   }
 
   async function onUnsuspend(id: string) {
+    const ok = await requestConfirm({
+      title: "Lift suspension?",
+      description: "This account will be able to sign in again.",
+      confirmLabel: "Unsuspend"
+    });
+    if (!ok) return;
     try {
       await unsuspendAdminUser(id);
       toast.success("Suspension lifted.");
@@ -204,7 +217,7 @@ export default function AdminUsersPage() {
                           {row.role === "seller" ? (
                             <span>
                               <span className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
-                                Verification
+                                Permit status
                               </span>
                               <span className="ml-1.5 text-foreground">
                                 {formatVerificationStatusLabel(row.verificationStatus)}
@@ -459,7 +472,7 @@ export default function AdminUsersPage() {
                     </p>
                     {detail.verificationStatus ? (
                       <p>
-                        <span className="font-semibold text-foreground">Verification: </span>
+                        <span className="font-semibold text-foreground">Permit status: </span>
                         {formatVerificationStatusLabel(detail.verificationStatus)}
                       </p>
                     ) : null}
@@ -507,7 +520,7 @@ export default function AdminUsersPage() {
                 {verificationSubmissionsToShow.length > 0 ? (
                   <div className="rounded-md border border-(--border) bg-(--surface) p-3 text-xs text-(--muted)">
                     <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
-                      Verification submissions
+                      Past permit submissions
                     </p>
                     <ul className="space-y-2">
                       {verificationSubmissionsToShow.map((v) => (

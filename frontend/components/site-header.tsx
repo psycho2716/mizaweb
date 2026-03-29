@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, LogOut, User } from "lucide-react";
+import { ChevronDown, LogOut, Settings, User } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -42,10 +42,21 @@ function UserProfileMenu({ user, onLogout }: UserProfileMenuProps) {
                 {user.role === "seller" ? (
                     <Link
                         href="/seller/profile"
-                        className="block px-3 py-2.5 text-left text-sm font-medium text-(--foreground)/90 hover:bg-(--surface-elevated)"
+                        className="flex items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-(--foreground)/90 hover:bg-(--surface-elevated)"
                         role="menuitem"
                     >
-                        Profile
+                        <Settings className="h-4 w-4 shrink-0 text-(--muted)" aria-hidden />
+                        Settings
+                    </Link>
+                ) : null}
+                {user.role === "buyer" ? (
+                    <Link
+                        href="/buyer/settings"
+                        className="flex items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-(--foreground)/90 hover:bg-(--surface-elevated)"
+                        role="menuitem"
+                    >
+                        <Settings className="h-4 w-4 shrink-0 text-(--muted)" aria-hidden />
+                        Account settings
                     </Link>
                 ) : null}
                 <button
@@ -156,12 +167,26 @@ export function SiteHeader() {
                         </Link>
                     ) : null}
                     {user?.role === "buyer" ? (
-                        <Link
-                            href="/buyer/orders"
-                            className={navLinkClass(pathname.startsWith("/buyer"))}
-                        >
-                            My orders
-                        </Link>
+                        <>
+                            <Link
+                                href="/buyer/orders"
+                                className={navLinkClass(pathname.startsWith("/buyer/orders"))}
+                            >
+                                My orders
+                            </Link>
+                            <Link
+                                href="/buyer/messages"
+                                className={navLinkClass(pathname.startsWith("/buyer/messages"))}
+                            >
+                                Messages
+                            </Link>
+                            <Link
+                                href="/buyer/settings"
+                                className={navLinkClass(pathname.startsWith("/buyer/settings"))}
+                            >
+                                Settings
+                            </Link>
+                        </>
                     ) : null}
                     {user?.role === "seller" ? (
                         <>
@@ -184,6 +209,12 @@ export function SiteHeader() {
                                 className={navLinkClass(pathname.startsWith("/seller/orders"))}
                             >
                                 Orders
+                            </Link>
+                            <Link
+                                href="/seller/messages"
+                                className={navLinkClass(pathname.startsWith("/seller/messages"))}
+                            >
+                                Messages
                             </Link>
                         </>
                     ) : null}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cn, formatPeso } from "@/lib/utils";
 import { Box, Coins, ScanSearch } from "lucide-react";
 import type { LandingHighlightsResponse } from "@/types";
 
@@ -22,7 +23,7 @@ export default async function Home() {
         {
             title: "Curated stone goods",
             description:
-                "Sculptures, kitchen and dining pieces, décor, keychains, and gifts from verified sellers—clear listings and PHP pricing.",
+                "Sculptures, kitchen and dining pieces, décor, keychains, and gifts from verified sellers—clear listings and ₱ pricing.",
             icon: ScanSearch
         },
         {
@@ -55,7 +56,7 @@ export default async function Home() {
                     </h1>
                     <p className="mt-5 max-w-md text-sm leading-7 text-(--muted)">
                         Shop marble and stone sculptures, kitchen pieces, décor, accessories, and
-                        gifts from Filipino artisans—browse in PHP, message sellers, and checkout in
+                        gifts from Filipino artisans—browse in ₱, message sellers, and checkout in
                         one place.
                     </p>
                     <div className="mt-8 flex flex-wrap gap-3">
@@ -131,18 +132,28 @@ export default async function Home() {
                             className="group overflow-hidden rounded-sm border border-(--border) bg-(--surface)"
                         >
                             <div
-                                className={[
-                                    "h-56 w-full",
-                                    index === 0 &&
+                                className={cn(
+                                    "relative h-56 w-full overflow-hidden bg-(--surface-elevated)",
+                                    !product.thumbnailUrl &&
+                                        index === 0 &&
                                         "bg-[linear-gradient(145deg,#d7d9d7,#a5aba7,#e5e6e4)]",
-                                    index === 1 &&
+                                    !product.thumbnailUrl &&
+                                        index === 1 &&
                                         "bg-[linear-gradient(145deg,#070b12,#0f1722,#1b2530)]",
-                                    index === 2 &&
+                                    !product.thumbnailUrl &&
+                                        index === 2 &&
                                         "bg-[linear-gradient(145deg,#1e4d78,#355f89,#23496d)]"
-                                ]
-                                    .filter(Boolean)
-                                    .join(" ")}
-                            />
+                                )}
+                            >
+                                {product.thumbnailUrl ? (
+                                    // eslint-disable-next-line @next/next/no-img-element -- remote seller/storage URLs; domains vary by env
+                                    <img
+                                        src={product.thumbnailUrl}
+                                        alt=""
+                                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                                    />
+                                ) : null}
+                            </div>
                             <div className="space-y-2 border-t border-(--border) bg-(--surface-elevated) p-4">
                                 <p className="line-clamp-1 text-sm font-semibold text-foreground">
                                     {product.title}
@@ -152,7 +163,7 @@ export default async function Home() {
                                         "Hand-finished stone piece from a verified seller."}
                                 </p>
                                 <p className="text-xs font-semibold text-(--accent)">
-                                    PHP {product.basePrice}
+                                    {formatPeso(product.basePrice)}
                                 </p>
                             </div>
                         </Link>
@@ -169,7 +180,7 @@ export default async function Home() {
                 <article className="rounded-sm border border-(--border) bg-(--surface) p-8">
                     <h3 className="text-3xl font-semibold text-foreground">For buyers</h3>
                     <p className="mt-3 max-w-sm text-sm leading-7 text-(--muted)">
-                        Discover stone décor, gifts, and everyday pieces, compare prices in PHP, and
+                        Discover stone décor, gifts, and everyday pieces, compare prices in ₱, and
                         order from verified sellers with order tracking and chat.
                     </p>
                     <Link

@@ -5,6 +5,8 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   fullName?: string;
+  /** Portrait URL (stored in Supabase user_metadata for buyers). */
+  profileImageUrl?: string;
   suspended?: boolean;
 }
 

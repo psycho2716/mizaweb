@@ -112,6 +112,57 @@ export async function createSignedVerificationDownloadUrl(
   return data.signedUrl;
 }
 
+/** Stable URL shape stored in DB (public path); bucket may still be private — use signed URLs for display. */
+export function getVerificationDocsCanonicalUrl(objectPath: string): string | undefined {
+  return storagePublicObjectUrl(env.SUPABASE_VERIFICATION_BUCKET, objectPath);
+}
+
+export function mockVerificationDocsAssetUrl(objectPath: string): string {
+  return `https://mock-upload.local/${env.SUPABASE_VERIFICATION_BUCKET}/${objectPath}`;
+}
+
+/**
+ * Returns a time-limited signed URL for browser display when the stored value points at verification-docs.
+ * External URLs and unrecognized shapes are returned unchanged.
+ */
+/** Collapse signed or public-path URLs to the canonical object URL for DB storage. */
+export function normalizeVerificationDocsStoredUrl(
+  url: string | undefined | null,
+): string | undefined {
+  if (url === undefined || url === null || !String(url).trim()) {
+    return undefined;
+  }
+  const trimmed = String(url).trim();
+  const path = extractVerificationObjectPath(trimmed);
+  if (!path) {
+    return trimmed;
+  }
+  return getVerificationDocsCanonicalUrl(path) ?? mockVerificationDocsAssetUrl(path);
+}
+
+export async function resolveVerificationDocsReadUrl(
+  storedUrl: string | undefined | null,
+  expiresInSeconds = 60 * 60 * 24 * 7,
+): Promise<string | undefined> {
+  if (storedUrl === undefined || storedUrl === null || !String(storedUrl).trim()) {
+    return undefined;
+  }
+  const trimmed = String(storedUrl).trim();
+  if (!isSupabaseConfigured()) {
+    return trimmed;
+  }
+  const path = extractVerificationObjectPath(trimmed);
+  if (!path) {
+    return trimmed;
+  }
+  const signed = await createSignedVerificationDownloadUrl(path, expiresInSeconds);
+  if (signed) {
+    return signed;
+  }
+  const canonical = getVerificationDocsCanonicalUrl(path);
+  return canonical ?? trimmed;
+}
+
 export async function generateVerificationUploadTarget(
   sellerId: string,
   filename: string,
@@ -135,12 +186,19 @@ export async function generateVerificationUploadTarget(
     ? env.SUPABASE_PRODUCT_MEDIA_BUCKET
     : env.SUPABASE_VERIFICATION_BUCKET;
 
+  const mockPublicUrl = (base: string): string | undefined => {
+    if (isProductMediaKind(kind)) return base;
+    if (kind === "profile" || kind === "background" || kind === "payment-qr") return base;
+    return undefined;
+  };
+
   if (!isSupabaseConfigured()) {
     const mockBase = `https://mock-upload.local/${bucket}/${path}`;
+    const publicUrl = mockPublicUrl(mockBase);
     return {
       path,
       uploadUrl: mockBase,
-      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
+      ...(publicUrl ? { publicUrl } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
@@ -149,10 +207,11 @@ export async function generateVerificationUploadTarget(
   const supabase = createSupabaseAdminClient();
   if (!supabase) {
     const mockBase = `https://mock-upload.local/${bucket}/${path}`;
+    const publicUrl = mockPublicUrl(mockBase);
     return {
       path,
       uploadUrl: mockBase,
-      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
+      ...(publicUrl ? { publicUrl } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
@@ -163,18 +222,22 @@ export async function generateVerificationUploadTarget(
   if (error || !data?.signedUrl) {
     console.error("[verification] createSignedUploadUrl", error);
     const mockBase = `https://mock-upload.local/${bucket}/${path}`;
+    const publicUrl = mockPublicUrl(mockBase);
     return {
       path,
       uploadUrl: mockBase,
-      ...(isProductMediaKind(kind) ? { publicUrl: mockBase } : {}),
+      ...(publicUrl ? { publicUrl } : {}),
       expiresIn: 3600,
       provider: "mock",
     };
   }
 
-  const publicUrl = isProductMediaKind(kind)
-    ? storagePublicObjectUrl(bucket, path)
-    : undefined;
+  let publicUrl: string | undefined;
+  if (isProductMediaKind(kind)) {
+    publicUrl = storagePublicObjectUrl(bucket, path);
+  } else if (kind === "profile" || kind === "background" || kind === "payment-qr") {
+    publicUrl = storagePublicObjectUrl(bucket, path);
+  }
 
   return {
     path,

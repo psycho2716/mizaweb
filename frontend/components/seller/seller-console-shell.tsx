@@ -5,9 +5,10 @@ import {
     HelpCircle,
     LayoutDashboard,
     LogOut,
+    MessageCircle,
     Package,
     ShoppingBag,
-    User
+    Settings
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -23,7 +24,8 @@ const navItems = [
     },
     { href: "/seller/listings", label: "Products", key: "products" as const, icon: Package },
     { href: "/seller/orders", label: "Orders", key: "orders" as const, icon: ShoppingBag },
-    { href: "/seller/profile", label: "Settings", key: "profile" as const, icon: User }
+    { href: "/seller/messages", label: "Messages", key: "messages" as const, icon: MessageCircle },
+    { href: "/seller/profile", label: "Settings", key: "profile" as const, icon: Settings }
 ] as const;
 
 function initialsFromUser(user: AuthUser | null): string {
@@ -71,21 +73,21 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
         window.location.href = "/";
     }, []);
 
-    const displayName = user?.fullName?.trim() || user?.email || "Merchant";
+    const displayName = user?.fullName?.trim() || user?.email || "Seller";
 
     return (
-        <div className="flex min-h-screen bg-(--background) text-foreground">
-            <aside className="hidden w-56 shrink-0 flex-col border-r border-(--border) bg-[#0b0e14] lg:flex">
-                <div className="border-b border-(--border) px-5 py-6">
+        <div className="flex h-full min-h-0 overflow-hidden bg-(--background) text-foreground">
+            <aside className="hidden h-full min-h-0 w-56 shrink-0 flex-col border-r border-(--border) bg-[#0b0e14] lg:flex">
+                <div className="shrink-0 border-b border-(--border) px-5 py-6">
                     <p className="text-lg font-semibold tracking-tight text-foreground">
                         {appName}
                     </p>
                     <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                        Verified merchant
+                        Verified seller
                     </p>
                 </div>
                 <nav
-                    className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3"
+                    className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-y-contain p-3"
                     aria-label="Seller navigation"
                 >
                     {navItems.map((item) => {
@@ -108,7 +110,7 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                         );
                     })}
                 </nav>
-                <div className="mt-auto border-t border-(--border) p-4">
+                <div className="mt-auto shrink-0 border-t border-(--border) p-4">
                     <div className="flex items-center gap-3 rounded-md border border-(--border) bg-(--surface) p-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-(--accent)/20 text-xs font-bold text-(--accent)">
                             {initialsFromUser(user)}
@@ -118,15 +120,15 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                                 {displayName}
                             </p>
                             <p className="truncate text-[10px] uppercase tracking-wider text-(--muted)">
-                                Merchant account
+                                Seller account
                             </p>
                         </div>
                     </div>
                 </div>
             </aside>
 
-            <div className="flex min-w-0 flex-1 flex-col">
-                <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/[0.06] bg-[#10131a]/92 px-4 backdrop-blur-xl md:px-6">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-white/[0.06] bg-[#10131a]/92 px-4 backdrop-blur-xl md:px-6">
                     <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
                         <span className="truncate font-semibold text-(--accent)">{appName}</span>
                         <span className="shrink-0 text-(--border)">|</span>
@@ -161,7 +163,7 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                 </header>
 
                 <nav
-                    className="flex gap-1 border-b border-(--border) bg-[#0b0e14] px-2 py-2 lg:hidden"
+                    className="flex shrink-0 gap-1 border-b border-(--border) bg-[#0b0e14] px-2 py-2 lg:hidden"
                     aria-label="Seller sections"
                 >
                     {navItems.map((item) => {
@@ -183,7 +185,9 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                     })}
                 </nav>
 
-                <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
+                <main className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+                    {children}
+                </main>
             </div>
         </div>
     );

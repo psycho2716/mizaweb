@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
     useCallback,
     useEffect,
@@ -21,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiRequestError } from "@/lib/api/client";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import {
     addProductMedia,
     createProduct,
@@ -40,7 +42,7 @@ import {
     DIMENSIONS_OPTION_NAME,
     getProductOptionValues
 } from "@/lib/product-variant-options";
-import { cn } from "@/lib/utils";
+import { cn, formatPeso } from "@/lib/utils";
 import type {
     Product,
     ProductDetail,
@@ -126,14 +128,14 @@ function isLikelyVideoFileUrl(url: string): boolean {
 
 function toastImageTo3dFailure(error: unknown): void {
     if (error instanceof ApiRequestError && error.code === "NSFW_REJECTED") {
-        toast.error("This photo can’t be turned into a 3D model", {
+        toast.error("This photo can’t be used for a 3D preview", {
             description:
-                "It didn’t pass our content safety check (for example adult or sensitive imagery). Use a clear, neutral product or object photo instead. You were not charged for 3D generation."
+                "It didn’t pass our safety check. Try a clear, neutral product photo instead. You weren’t charged."
         });
         return;
     }
     if (error instanceof ApiRequestError && error.status === 422) {
-        toast.error("3D generation wasn’t allowed", {
+        toast.error("3D preview wasn’t allowed", {
             description: error.message
         });
         return;
@@ -150,7 +152,7 @@ function toastImageTo3dFailure(error: unknown): void {
         toast.error(m);
         return;
     }
-    toast.error("3D generation failed");
+    toast.error("Couldn’t create the 3D preview");
 }
 
 function productDetailToFormValues(detail: ProductDetail): SellerProductFormValues {
@@ -351,7 +353,7 @@ function FormCardModelViewer({
         <div
             className="overflow-hidden rounded-lg border border-(--accent)/30 bg-[#050608]/50 ring-1 ring-(--accent)/20"
             role="region"
-            aria-label="Generated 3D model"
+            aria-label="Interactive 3D preview"
         >
             <div className="flex min-w-0 flex-col gap-2 border-b border-(--border)/80 bg-[#080b10]/85 px-3 py-2.5">
                 {statusSlot}
@@ -364,8 +366,8 @@ function FormCardModelViewer({
                     className="absolute inset-0 h-full min-h-0 w-full cursor-grab active:cursor-grabbing"
                 />
             </div>
-            <p className="border-t border-(--border)/60 px-3 py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-(--accent)/85 sm:text-left">
-                Interactive · drag to orbit, scroll to zoom
+            <p className="border-t border-(--border)/60 px-3 py-2 text-center text-[10px] font-medium text-(--accent)/85 sm:text-left">
+                Drag to turn · scroll to zoom in or out
             </p>
         </div>
     );
@@ -419,7 +421,7 @@ function ProductFormFields({
             </div>
             <div className="grid gap-2">
                 <Label htmlFor={`${idPrefix}-basePrice`} className="text-(--muted)">
-                    Base price (PHP)
+                    Base price (₱)
                 </Label>
                 <Input
                     id={`${idPrefix}-basePrice`}
@@ -488,7 +490,7 @@ function ProductFormFields({
                                 checked={field.value}
                                 onChange={(e) => field.onChange(e.target.checked)}
                             />
-                            Featured listing
+                            Feature on storefront
                         </label>
                     )}
                 />
@@ -572,7 +574,7 @@ function ListingFormModal({
                         <div className="flex flex-wrap items-center gap-3">
                             <h2
                                 id="listing-modal-title"
-                                className="border-l-2 border-(--accent) pl-3 text-sm font-semibold uppercase tracking-wide text-foreground"
+                                className="border-l-2 border-(--accent) pl-3 text-sm font-semibold tracking-tight text-foreground"
                             >
                                 {title}
                             </h2>
@@ -600,6 +602,9 @@ function ListingFormModal({
 }
 
 export default function SellerListingsPage() {
+    const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
+    const searchParams = useSearchParams();
+    const router = useRouter();
     const [products, setProducts] = useState<Product[]>([]);
     const [selected, setSelected] = useState<ProductDetail | null>(null);
     const [page, setPage] = useState(1);
@@ -759,6 +764,17 @@ export default function SellerListingsPage() {
         },
         [editForm]
     );
+
+    useEffect(() => {
+        const id = searchParams.get("edit")?.trim();
+        if (!id) {
+            return;
+        }
+        router.replace("/seller/listings", { scroll: false });
+        void openProductForEdit(id).catch(() => {
+            toast.error("Could not open that product for editing.");
+        });
+    }, [searchParams, router, openProductForEdit]);
 
     const totalPages = Math.max(1, Math.ceil(products.length / PAGE_SIZE));
     const safePage = Math.min(page, totalPages);
@@ -1026,7 +1042,7 @@ export default function SellerListingsPage() {
 
     const runGenerate3dCreate = useCallback(async () => {
         if (!create3dSource) {
-            toast.error("Upload a 2D product photo first.");
+            toast.error("Upload a product photo first.");
             return;
         }
         setGenerating3dCreate(true);
@@ -1043,9 +1059,7 @@ export default function SellerListingsPage() {
                 if (prev) URL.revokeObjectURL(prev.previewUrl);
                 return { blob, previewUrl: URL.createObjectURL(blob) };
             });
-            toast.success(
-                "3D model ready — it uploads to your bucket when you create the listing."
-            );
+            toast.success("3D preview is ready — it will be saved when you create the product.");
         } catch (error) {
             toastImageTo3dFailure(error);
         } finally {
@@ -1056,7 +1070,7 @@ export default function SellerListingsPage() {
     const runGenerate3dEdit = useCallback(async () => {
         if (!selected) return;
         if (!edit3dSource) {
-            toast.error("Upload a 2D product photo first.");
+            toast.error("Upload a product photo first.");
             return;
         }
         setGenerating3dEdit(true);
@@ -1074,7 +1088,7 @@ export default function SellerListingsPage() {
                 return { blob, previewUrl: URL.createObjectURL(blob) };
             });
             toast.success(
-                "3D model ready — it uploads when you save changes or publish from the table."
+                "3D preview is ready — save your changes (or use Show on store) to keep it."
             );
         } catch (error) {
             toastImageTo3dFailure(error);
@@ -1114,7 +1128,7 @@ export default function SellerListingsPage() {
                 return null;
             });
             await loadProducts();
-            toast.success("Listing created.");
+            toast.success("Product created.");
             setShowCreatePanel(false);
             createForm.reset(defaultFormValues);
         } catch (error) {
@@ -1194,9 +1208,9 @@ export default function SellerListingsPage() {
             if (selected?.id === productId) {
                 await openProductForEdit(productId);
             }
-            toast.success("Published.");
+            toast.success("Visible on your store.");
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Publish failed");
+            toast.error(error instanceof Error ? error.message : "Could not show on store");
         }
     }
 
@@ -1207,16 +1221,20 @@ export default function SellerListingsPage() {
             if (selected?.id === productId) {
                 await openProductForEdit(productId);
             }
-            toast.success("Unpublished.");
+            toast.success("Hidden from your store.");
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Unpublish failed");
+            toast.error(error instanceof Error ? error.message : "Could not hide from store");
         }
     }
 
     async function handleDeleteProduct(productId: string) {
-        if (!window.confirm("Delete this product? This cannot be undone.")) {
-            return;
-        }
+        const ok = await requestConfirm({
+            title: "Delete this product?",
+            description: "This removes the listing and cannot be undone.",
+            confirmLabel: "Delete",
+            destructive: true
+        });
+        if (!ok) return;
         try {
             await deleteProductById(productId);
             if (selected?.id === productId) {
@@ -1234,22 +1252,22 @@ export default function SellerListingsPage() {
             <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                        Inventory management
+                        Your products
                     </p>
                     <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-                        Stone Products
+                        Products
                     </h1>
                     <p className="mt-1 text-sm text-(--muted)">
-                        Manage your stone inventory, publish new listings, and update product details.
+                        Add items, set prices, and choose what appears on your storefront.
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-2 rounded-lg border border-(--border) bg-(--surface) px-4 py-3 text-right">
                         <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
-                            Products value
+                            Total if all sold (list price)
                         </p>
                         <p className="text-lg font-semibold tabular-nums text-foreground">
-                            PHP {manifestTotal.toLocaleString()}
+                            {formatPeso(manifestTotal)}
                         </p>
                     </div>
                     <div className="flex items-center gap-2 rounded-lg border border-(--border) bg-(--surface) px-4 py-3 text-right">
@@ -1283,7 +1301,7 @@ export default function SellerListingsPage() {
                 open={showCreatePanel}
                 onClose={closeCreatePanel}
                 title="New product"
-                description="Create a draft listing. You can publish from the table or after editing."
+                description="Save as a draft first. When you’re ready, use Show on store in the table to make it visible to shoppers."
             >
                 <form
                     className="grid gap-4 sm:grid-cols-2"
@@ -1381,12 +1399,12 @@ export default function SellerListingsPage() {
                         threeDSection={
                             <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
                                 <div>
-                                    <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
-                                        AI-generated 3D model
+                                    <p className="text-xs font-semibold tracking-wide text-(--accent)">
+                                        Optional 3D preview
                                     </p>
                                     <p className="mt-1 text-xs text-(--muted)">
-                                        Upload a clear, well-lit 2D photo. Wait for generation to
-                                        finish before creating the listing.
+                                        Add a clear, well-lit product photo, then create a 3D preview.
+                                        Wait until it finishes before you create the product.
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap items-end gap-3">
@@ -1397,7 +1415,7 @@ export default function SellerListingsPage() {
                                                 createForm.formState.isSubmitting ||
                                                 generating3dCreate
                                             }
-                                            removeLabel="Remove source photo"
+                                            removeLabel="Remove photo"
                                             onRemove={removeCreate3dSource}
                                         />
                                     ) : null}
@@ -1417,8 +1435,8 @@ export default function SellerListingsPage() {
                                             />
                                             <MediaAddTile
                                                 kind="source"
-                                                label="2D source"
-                                                ariaLabel="Upload 2D photo for 3D generation"
+                                                label="Photo for 3D"
+                                                ariaLabel="Upload a product photo to build a 3D preview"
                                                 disabled={
                                                     createForm.formState.isSubmitting ||
                                                     generating3dCreate
@@ -1446,7 +1464,7 @@ export default function SellerListingsPage() {
                                                     aria-hidden
                                                 />
                                             ) : null}
-                                            Generate 3D
+                                            Create 3D preview
                                         </Button>
                                     ) : null}
                                 </div>
@@ -1456,15 +1474,15 @@ export default function SellerListingsPage() {
                                         statusSlot={
                                             <>
                                                 <p className="text-xs text-(--muted)">
-                                                    Generated model preview — not saved to storage
-                                                    until you create the listing.
+                                                    Preview only — it isn&apos;t saved until you
+                                                    create the product.
                                                 </p>
                                                 <button
                                                     type="button"
                                                     className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
                                                     onClick={removeCreate3dGlbDraft}
                                                 >
-                                                    Remove draft model
+                                                    Remove preview
                                                 </button>
                                             </>
                                         }
@@ -1476,7 +1494,7 @@ export default function SellerListingsPage() {
                             create3dGlb ? (
                                 <div className="grid gap-2">
                                     <Label htmlFor="create-dimensions" className="text-(--muted)">
-                                        Available dimensions (3D picker){" "}
+                                        Sizes shoppers can choose (for 3D){" "}
                                         <span className="text-red-400" aria-hidden>
                                             *
                                         </span>
@@ -1494,8 +1512,7 @@ export default function SellerListingsPage() {
                                         </p>
                                     ) : null}
                                     <p className="text-xs text-(--muted)">
-                                        Required when you have generated a 3D model for this
-                                        listing.
+                                        Required when this product has a 3D preview.
                                     </p>
                                 </div>
                             ) : null
@@ -1516,11 +1533,11 @@ export default function SellerListingsPage() {
             <ListingFormModal
                 open={selected !== null}
                 onClose={closeEditPanel}
-                title="Edit listing"
+                title="Edit product"
                 description={
                     selected?.isPublished
-                        ? "Save changes updates your live listing."
-                        : "Save changes stores your draft. Use Publish in the actions column when you’re ready to go live (verification rules still apply)."
+                        ? "Saving updates what buyers see on your store."
+                        : "Saving keeps your draft. Use Show on store in the table when you’re ready (your account must be approved to sell)."
                 }
                 headerExtras={
                     selected ? (
@@ -1528,7 +1545,7 @@ export default function SellerListingsPage() {
                             href={`/seller/listings/${selected.id}`}
                             className="text-xs font-medium text-(--accent) underline-offset-2 hover:underline"
                         >
-                            Full page editor
+                            Open full-page editor
                         </Link>
                     ) : null
                 }
@@ -1676,12 +1693,12 @@ export default function SellerListingsPage() {
                         threeDSection={
                             <div className="space-y-4 rounded-md border border-(--border) bg-[#080b10]/60 p-4">
                                 <div>
-                                    <p className="text-xs font-semibold uppercase tracking-wider text-(--accent)">
-                                        AI-generated 3D model
+                                    <p className="text-xs font-semibold tracking-wide text-(--accent)">
+                                        Optional 3D preview
                                     </p>
                                     <p className="mt-1 text-xs text-(--muted)">
-                                        Upload a 2D photo and generate a new GLB, or keep the saved
-                                        model below. New models upload to your bucket when you click{" "}
+                                        Upload a new product photo to build a 3D preview, or keep the
+                                        one below. New previews are saved when you click{" "}
                                         <span className="text-foreground">Save changes</span>.
                                     </p>
                                 </div>
@@ -1693,7 +1710,7 @@ export default function SellerListingsPage() {
                                                 editForm.formState.isSubmitting ||
                                                 generating3dEdit
                                             }
-                                            removeLabel="Remove source photo"
+                                            removeLabel="Remove photo"
                                             onRemove={removeEdit3dSource}
                                         />
                                     ) : null}
@@ -1713,8 +1730,8 @@ export default function SellerListingsPage() {
                                             />
                                             <MediaAddTile
                                                 kind="source"
-                                                label="2D source"
-                                                ariaLabel="Upload 2D photo for 3D generation"
+                                                label="Photo for 3D"
+                                                ariaLabel="Upload a product photo to build a 3D preview"
                                                 disabled={
                                                     editForm.formState.isSubmitting ||
                                                     generating3dEdit
@@ -1740,7 +1757,7 @@ export default function SellerListingsPage() {
                                                     aria-hidden
                                                 />
                                             ) : null}
-                                            Generate 3D
+                                            Create 3D preview
                                         </Button>
                                     ) : null}
                                 </div>
@@ -1751,21 +1768,21 @@ export default function SellerListingsPage() {
                                             edit3dGlb ? (
                                                 <>
                                                     <p className="text-xs text-(--muted)">
-                                                        New generated model — replaces the saved GLB
-                                                        when you save changes.
+                                                        New preview — replaces the saved one when you
+                                                        save changes.
                                                     </p>
                                                     <button
                                                         type="button"
                                                         className="w-fit text-xs font-medium text-red-400 hover:text-red-300"
                                                         onClick={removeEdit3dGlbDraft}
                                                     >
-                                                        Remove draft model
+                                                        Remove preview
                                                     </button>
                                                 </>
                                             ) : (
                                                 <p className="text-xs text-(--muted)">
-                                                    Saved listing model — upload a new 2D photo and
-                                                    generate to replace when you save changes.
+                                                    Saved 3D preview — upload a new photo and create a
+                                                    new preview to replace it when you save.
                                                 </p>
                                             )
                                         }
@@ -1777,7 +1794,7 @@ export default function SellerListingsPage() {
                             editModelPreviewUrl ? (
                                 <div className="grid gap-2">
                                     <Label htmlFor="edit-dimensions" className="text-(--muted)">
-                                        Available dimensions (3D picker){" "}
+                                        Sizes shoppers can choose (for 3D){" "}
                                         <span className="text-red-400" aria-hidden>
                                             *
                                         </span>
@@ -1795,8 +1812,7 @@ export default function SellerListingsPage() {
                                         </p>
                                     ) : null}
                                     <p className="text-xs text-(--muted)">
-                                        Required while this listing has a 3D model (generated or
-                                        saved).
+                                        Required while this product has a 3D preview.
                                     </p>
                                 </div>
                             ) : null
@@ -1824,11 +1840,12 @@ export default function SellerListingsPage() {
 
             <div className="overflow-hidden rounded-lg border border-(--border) bg-(--surface)">
                 <div className="overflow-x-auto">
-                    <table className="w-full min-w-[820px] border-collapse">
+                    <table className="w-full min-w-[900px] border-collapse">
                         <thead className="bg-[#080b10]">
                             <tr>
+                                <th className={cn(tableHead, "w-[72px]")}>Preview</th>
                                 <th className={tableHead}>Title</th>
-                                <th className={cn(tableHead, "whitespace-nowrap")}>Fulfillment</th>
+                                <th className={cn(tableHead, "whitespace-nowrap")}>Availability</th>
                                 <th className={cn(tableHead, "whitespace-nowrap")}>Price</th>
                                 <th className={cn(tableHead, "whitespace-nowrap")}>Status</th>
                                 <th className={cn(tableHead, "whitespace-nowrap text-right")}>
@@ -1842,6 +1859,24 @@ export default function SellerListingsPage() {
                                     key={product.id}
                                     className="border-t border-(--border) hover:bg-(--surface-elevated)/40"
                                 >
+                                    <td className={cn(tableCell, "w-[72px]")}>
+                                        <div className="h-12 w-12 overflow-hidden rounded-md border border-(--border) bg-[#080b10] ring-1 ring-white/[0.04]">
+                                            {product.thumbnailUrl ? (
+                                                <img
+                                                    src={product.thumbnailUrl}
+                                                    alt={`${product.title} preview`}
+                                                    className="h-full w-full object-cover"
+                                                />
+                                            ) : (
+                                                <div
+                                                    className="flex h-full w-full items-center justify-center text-[9px] font-medium uppercase tracking-wider text-(--muted)"
+                                                    aria-hidden
+                                                >
+                                                    —
+                                                </div>
+                                            )}
+                                        </div>
+                                    </td>
                                     <td className={cn(tableCell, "max-w-[220px]")}>
                                         <span className="line-clamp-2 font-medium text-foreground">
                                             {product.title}
@@ -1870,7 +1905,7 @@ export default function SellerListingsPage() {
                                             "whitespace-nowrap tabular-nums text-foreground"
                                         )}
                                     >
-                                        PHP {product.basePrice.toLocaleString()}
+                                        {formatPeso(product.basePrice)}
                                     </td>
                                     <td className={tableCell}>
                                         <span
@@ -1881,7 +1916,7 @@ export default function SellerListingsPage() {
                                                     : "bg-(--border) text-(--muted)"
                                             )}
                                         >
-                                            {product.isPublished ? "Published" : "Draft"}
+                                            {product.isPublished ? "On store" : "Draft"}
                                         </span>
                                     </td>
                                     <td className={cn(tableCell, "text-right")}>
@@ -1905,7 +1940,7 @@ export default function SellerListingsPage() {
                                                         void handleUnpublishProduct(product.id)
                                                     }
                                                 >
-                                                    Unpublish
+                                                    Hide from store
                                                 </Button>
                                             ) : (
                                                 <Button
@@ -1917,7 +1952,7 @@ export default function SellerListingsPage() {
                                                         void handlePublishProduct(product.id)
                                                     }
                                                 >
-                                                    Publish
+                                                    Show on store
                                                 </Button>
                                             )}
                                             <Button
@@ -1938,7 +1973,7 @@ export default function SellerListingsPage() {
                 </div>
                 {products.length === 0 ? (
                     <p className="border-t border-(--border) px-4 py-8 text-center text-sm text-(--muted)">
-                        No products yet. Use &quot;New product&quot; to create your first listing.
+                        No products yet. Tap &quot;New product&quot; to add your first one.
                     </p>
                 ) : null}
                 <AdminTablePagination
@@ -1950,6 +1985,7 @@ export default function SellerListingsPage() {
                     disabled={false}
                 />
             </div>
+            {confirmDialog}
         </div>
     );
 }

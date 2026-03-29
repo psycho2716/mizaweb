@@ -1,14 +1,18 @@
 import type {
   AuthUser,
   CartItem,
-  SellerProfile,
-  SellerPaymentMethod,
+  ConversationMessageRecord,
+  ConversationRecord,
   CustomizationOption,
   CustomizationRule,
   OrderMessage,
   OrderRecord,
   ProductMedia,
   ProductRecord,
+  ProductReviewRecord,
+  SellerPaymentMethod,
+  SellerLocationChangeRequest,
+  SellerProfile,
   VerificationStatus,
   VerificationSubmission,
 } from "../types/domain";
@@ -20,10 +24,14 @@ const sellerProfiles = new Map<string, SellerProfile>();
 const sellerPaymentMethods = new Map<string, SellerPaymentMethod>();
 const sellerStatus = new Map<string, VerificationStatus>();
 const verifications = new Map<string, VerificationSubmission>();
+const sellerLocationRequests = new Map<string, SellerLocationChangeRequest>();
 const products = new Map<string, ProductRecord>();
 const cartItems = new Map<string, CartItem>();
 const orders = new Map<string, OrderRecord>();
 const orderMessages = new Map<string, OrderMessage>();
+const productReviews = new Map<string, ProductReviewRecord>();
+const conversations = new Map<string, ConversationRecord>();
+const conversationMessages = new Map<string, ConversationMessageRecord>();
 const productMedia = new Map<string, ProductMedia>();
 const customizationOptions = new Map<string, CustomizationOption>();
 const customizationRules = new Map<string, CustomizationRule>();
@@ -66,10 +74,14 @@ export const db = {
   sellerPaymentMethods,
   sellerStatus,
   verifications,
+  sellerLocationRequests,
   products,
   cartItems,
   orders,
   orderMessages,
+  productReviews,
+  conversations,
+  conversationMessages,
   productMedia,
   customizationOptions,
   customizationRules,

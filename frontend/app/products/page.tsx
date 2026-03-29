@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatPeso } from "@/lib/utils";
 import { apiFetch } from "@/lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +28,7 @@ export default async function ProductsPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-(--muted)">
           Sculptures, kitchen and dining, décor, accessories, and gifts from verified sellers—all
-          priced in PHP.
+          priced in ₱.
         </p>
       </div>
 
@@ -41,7 +42,7 @@ export default async function ProductsPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <p className="text-lg font-semibold tabular-nums text-(--accent)">
-                  PHP {product.basePrice.toLocaleString()}
+                  {formatPeso(product.basePrice)}
                 </p>
                 <p className="text-xs font-semibold uppercase tracking-wider text-(--muted) group-hover:text-(--accent)">
                   View details →

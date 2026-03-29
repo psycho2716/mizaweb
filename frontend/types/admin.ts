@@ -1,10 +1,11 @@
 import type { AuthUser } from "./auth";
-import type { SellerPaymentMethod } from "./product";
+import type { SellerLocationChangeRequest, SellerPaymentMethod } from "./product";
 
 export type SellerVerificationState = "unsubmitted" | "pending" | "approved" | "rejected";
 
 export interface AdminOverviewData {
   pendingVerifications: number;
+  pendingLocationRequests: number;
   verifiedSellers: number;
   unverifiedSellers: number;
   totalSellers: number;
@@ -71,6 +72,21 @@ export interface AdminVerificationItem extends VerificationSubmission {
     accountNumber: string;
     qrImageUrl?: string;
   }>;
+}
+
+export interface AdminLocationRequestItem extends SellerLocationChangeRequest {
+  seller: {
+    id: string;
+    email: string;
+    fullName?: string;
+  } | null;
+  profile: {
+    sellerId: string;
+    businessName: string;
+    address: string;
+    shopLatitude?: number;
+    shopLongitude?: number;
+  } | null;
 }
 
 export interface AdminVerificationExpandedPanelProps {

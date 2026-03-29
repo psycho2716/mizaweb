@@ -41,26 +41,25 @@ function SellerShopMapPicker({
             <div className="space-y-2 md:col-span-2">
                 <div>
                     <p className="text-xs uppercase tracking-[0.14em] text-(--muted)">
-                        Shop location on map
+                        Pin your shop on the map
                     </p>
                     <p className="mt-1 text-xs text-(--muted)">
-                        Google Maps is used to pin your shop. Configure an API key to enable this
-                        step.
+                        The map needs a Google Maps setup from whoever runs the website. Until then,
+                        buyers still see your written address.
                     </p>
                 </div>
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100/90">
-                    <p className="font-medium text-amber-50">Missing Google Maps API key</p>
+                    <p className="font-medium text-amber-50">Map not available yet</p>
                     <p className="mt-1 text-xs leading-relaxed text-amber-100/85">
-                        Set{" "}
+                        For developers: add{" "}
                         <code className="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">
                             NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
                         </code>{" "}
                         in{" "}
                         <code className="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">
                             .env.local
-                        </code>
-                        . Enable the <strong>Maps JavaScript API</strong> for your key in Google
-                        Cloud Console.
+                        </code>{" "}
+                        and turn on the Maps JavaScript API for that key in Google Cloud.
                     </p>
                 </div>
                 {error ? <p className="text-sm text-red-400">{error}</p> : null}
@@ -72,11 +71,10 @@ function SellerShopMapPicker({
         <div className="space-y-2 md:col-span-2">
             <div>
                 <p className="text-xs uppercase tracking-[0.14em] text-(--muted)">
-                    Shop location on map
+                    Pin your shop on the map
                 </p>
                 <p className="mt-1 text-xs text-(--muted)">
-                    Click the map to drop a pin on your marble shop or showroom. Drag the pin to
-                    fine-tune.
+                    Click where your shop or showroom is. Drag the pin if you need to adjust it.
                 </p>
             </div>
             <APIProvider apiKey={apiKey}>
