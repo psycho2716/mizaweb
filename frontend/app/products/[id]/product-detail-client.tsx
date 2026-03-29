@@ -23,6 +23,7 @@ import {
     getProductReviews,
     postProductReview
 } from "@/lib/api/endpoints";
+import { getListingVideoPlayerKind, listingYoutubeEmbedUrl } from "@/lib/listing-video";
 import { buildProductModelViewerCustomization } from "@/lib/product-model-viewer-customization";
 import { cn, formatPeso } from "@/lib/utils";
 import type {
@@ -332,6 +333,13 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
 
     const showLivePreviewHint = hasModel3d && product.options.length > 0;
 
+    const listingVideoUrl = product.videoUrl?.trim() ?? "";
+    const listingVideoIsYoutube =
+        listingVideoUrl.length > 0 && getListingVideoPlayerKind(listingVideoUrl) === "youtube";
+    const listingYoutubeIframeSrc = listingVideoIsYoutube
+        ? listingYoutubeEmbedUrl(listingVideoUrl)
+        : null;
+
     return (
         <main className="mx-auto flex max-w-6xl flex-1 flex-col gap-10 px-4 py-8 sm:px-6 lg:py-12">
             <nav className="flex flex-wrap items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
@@ -485,15 +493,49 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                         </div>
                     ) : null}
 
-                    {product.videoUrl?.trim() ? (
-                        <a
-                            href={product.videoUrl.trim()}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block rounded-lg border border-(--border) bg-[#080b10] px-4 py-3 text-sm font-semibold text-(--accent) underline-offset-4 hover:underline"
+                    {listingVideoUrl ? (
+                        <section
+                            className="overflow-hidden rounded-xl border border-(--border) bg-[#050608] ring-1 ring-white/4"
+                            aria-label="Listing video"
                         >
-                            Watch listing video →
-                        </a>
+                            <p className="border-b border-(--border)/60 bg-[#080b10]/90 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
+                                Listing video
+                            </p>
+                            <div className="relative aspect-video w-full bg-black">
+                                {listingVideoIsYoutube && listingYoutubeIframeSrc ? (
+                                    <iframe
+                                        src={listingYoutubeIframeSrc}
+                                        title={`${product.title} — listing video`}
+                                        className="absolute inset-0 h-full w-full border-0"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                        allowFullScreen
+                                    />
+                                ) : listingVideoIsYoutube ? (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#080b10] px-4 text-center text-sm text-(--muted)">
+                                        <p>This YouTube link could not be embedded.</p>
+                                        <a
+                                            href={listingVideoUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-semibold text-(--accent) underline-offset-4 hover:underline"
+                                        >
+                                            Open video on YouTube →
+                                        </a>
+                                    </div>
+                                ) : (
+                                    <video
+                                        src={listingVideoUrl}
+                                        controls
+                                        playsInline
+                                        preload="metadata"
+                                        className="absolute inset-0 h-full w-full object-contain"
+                                        aria-label={`Video preview for ${product.title}`}
+                                    >
+                                        Your browser does not support embedded video.
+                                    </video>
+                                )}
+                            </div>
+                        </section>
                     ) : null}
                 </div>
 
