@@ -32,6 +32,28 @@ export interface ProductOption {
   values: string[];
 }
 
+/** Result of mapping a listing color/finish label to a 3D albedo tint. */
+export interface ResolvedMaterialTint {
+  hex: string;
+  /** Lerp factor toward `hex` in the viewer (0–1). */
+  blend: number;
+}
+
+/**
+ * Buyer 3D preview: derived from listing options (color, dimensions, finish).
+ * Applied in real time on the product detail GLB viewer.
+ */
+export interface ProductModelViewerCustomization {
+  /** Blend mesh color toward this hex when a color-like option is selected. */
+  materialTintHex?: string;
+  /** How strongly to lerp albedo toward `materialTintHex` (0–1). Stronger = swatch-accurate preview. */
+  materialTintBlend?: number;
+  /** Uniform scale vs baseline dimension preset (1 = default). */
+  scaleUniform: number;
+  /** Multiplier for PBR roughness from finish option (1 = model default after load). */
+  finishRoughnessMultiplier?: number;
+}
+
 export interface ProductRule {
   id: string;
   productId: string;

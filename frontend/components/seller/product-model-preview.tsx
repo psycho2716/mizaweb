@@ -2,9 +2,11 @@
 
 import { Environment, OrbitControls, useGLTF } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { Suspense, useLayoutEffect } from "react";
+import { Suspense, useLayoutEffect, useMemo } from "react";
 import * as THREE from "three";
+import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { cn } from "@/lib/utils";
+import type { ProductModelViewerCustomization } from "@/types";
 
 /** Softer preview response: even fill light, stronger IBL, gentle PBR tweaks so textures read. */
 function enhanceLoadedMaterials(root: THREE.Object3D) {
@@ -28,18 +30,103 @@ function enhanceLoadedMaterials(root: THREE.Object3D) {
     });
 }
 
-const enhancedScenes = new WeakSet<THREE.Object3D>();
-
-function GltfModel({ url }: { url: string }) {
-    const gltf = useGLTF(url);
-    useLayoutEffect(() => {
-        if (enhancedScenes.has(gltf.scene)) {
+function captureMaterialBaselines(root: THREE.Object3D) {
+    root.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) {
             return;
         }
-        enhancedScenes.add(gltf.scene);
-        enhanceLoadedMaterials(gltf.scene);
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const mat of mats) {
+            if (
+                mat instanceof THREE.MeshBasicMaterial ||
+                mat instanceof THREE.MeshStandardMaterial ||
+                mat instanceof THREE.MeshPhysicalMaterial
+            ) {
+                mat.userData.mizaBaseColor = mat.color.clone();
+            }
+            if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+                if (typeof mat.roughness === "number") {
+                    mat.userData.mizaBaseRoughness = mat.roughness;
+                }
+            }
+        }
+    });
+}
+
+function CustomizableGltfModel({
+    url,
+    customization
+}: {
+    url: string;
+    customization?: ProductModelViewerCustomization;
+}) {
+    const gltf = useGLTF(url);
+
+    const clonedScene = useMemo(() => {
+        const root = clone(gltf.scene) as THREE.Object3D;
+        enhanceLoadedMaterials(root);
+        captureMaterialBaselines(root);
+        return root;
     }, [gltf.scene, url]);
-    return <primitive object={gltf.scene} />;
+
+    const scaleUniform = customization?.scaleUniform ?? 1;
+    const tintHex = customization?.materialTintHex;
+    const tintBlendRaw = customization?.materialTintBlend;
+    const roughMult = customization?.finishRoughnessMultiplier;
+
+    useLayoutEffect(() => {
+        clonedScene.scale.setScalar(scaleUniform);
+    }, [clonedScene, scaleUniform]);
+
+    useLayoutEffect(() => {
+        const tint = tintHex ? new THREE.Color(tintHex) : null;
+        const lerpStandard =
+            tint && tintHex
+                ? Math.min(1, Math.max(0, tintBlendRaw ?? 0.82))
+                : 0;
+        const lerpBasic = tint && tintHex ? Math.min(1, lerpStandard + 0.04) : 0;
+
+        clonedScene.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) {
+                return;
+            }
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            for (const mat of mats) {
+                if (mat instanceof THREE.MeshBasicMaterial) {
+                    const base: THREE.Color | undefined = mat.userData.mizaBaseColor;
+                    if (base) {
+                        if (tint && lerpBasic > 0) {
+                            mat.color.copy(base).lerp(tint, lerpBasic);
+                        } else {
+                            mat.color.copy(base);
+                        }
+                    }
+                    mat.needsUpdate = true;
+                }
+                if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+                    const base: THREE.Color | undefined = mat.userData.mizaBaseColor;
+                    if (base) {
+                        if (tint && lerpStandard > 0) {
+                            mat.color.copy(base).lerp(tint, lerpStandard);
+                        } else {
+                            mat.color.copy(base);
+                        }
+                    }
+                    const baseRough: number | undefined = mat.userData.mizaBaseRoughness;
+                    if (typeof mat.roughness === "number" && baseRough !== undefined) {
+                        if (roughMult !== undefined) {
+                            mat.roughness = Math.min(1, Math.max(0.04, baseRough * roughMult));
+                        } else {
+                            mat.roughness = baseRough;
+                        }
+                    }
+                    mat.needsUpdate = true;
+                }
+            }
+        });
+    }, [clonedScene, tintHex, tintBlendRaw, roughMult]);
+
+    return <primitive object={clonedScene} />;
 }
 
 function SceneLights({ compact }: { compact?: boolean }) {
@@ -61,12 +148,14 @@ export interface ProductModelPreviewProps {
     className?: string;
     /** Tighter camera for compact embeds (e.g. seller form cards). */
     compact?: boolean;
+    /** Buyer listing: live tint / scale / roughness from selected options. */
+    customization?: ProductModelViewerCustomization;
 }
 
 /**
  * Interactive GLB/GLTF preview (Three.js via React Three Fiber).
  */
-export function ProductModelPreview({ modelUrl, className, compact }: ProductModelPreviewProps) {
+export function ProductModelPreview({ modelUrl, className, compact, customization }: ProductModelPreviewProps) {
     const cam = compact
         ? { position: [0.35, 0.45, 1.35] as [number, number, number], fov: 40 }
         : { position: [0, 0.6, 1.85] as [number, number, number], fov: 42 };
@@ -97,7 +186,7 @@ export function ProductModelPreview({ modelUrl, className, compact }: ProductMod
                     }
                 >
                     <SceneLights compact={compact} />
-                    <GltfModel url={modelUrl} />
+                    <CustomizableGltfModel url={modelUrl} customization={customization} />
                 </Suspense>
                 <OrbitControls
                     makeDefault
