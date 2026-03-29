@@ -10,6 +10,7 @@ import type {
     CartItemResponse,
     CartItemSelection,
     CartResponse,
+    CheckoutOnlinePaymentLine,
     CheckoutResponse,
     ConversationCreateResponse,
     ConversationsListResponse,
@@ -379,6 +380,7 @@ export function addCartItem(
 export function checkoutCart(payload: {
     paymentMethod: "cash" | "online";
     paymentReference?: string;
+    onlinePayments?: CheckoutOnlinePaymentLine[];
 }) {
     ensureGuestSessionId();
     return apiFetch<CheckoutResponse>("/checkout", {
@@ -608,9 +610,12 @@ export function updateBuyerProfile(payload: { fullName?: string; profileImageUrl
     });
 }
 
-export function createBuyerAssetUploadUrl(filename: string) {
+export function createBuyerAssetUploadUrl(
+    filename: string,
+    kind: "profile" | "payment-receipt" = "profile"
+) {
     return apiFetch<VerificationUploadTarget>("/buyer/assets/upload-url", {
         method: "POST",
-        body: JSON.stringify({ filename })
+        body: JSON.stringify(kind === "profile" ? { filename } : { filename, kind })
     });
 }

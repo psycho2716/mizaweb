@@ -1,29 +1,38 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ArrowRight, Package } from "lucide-react";
+import { ArrowLeft, ArrowRight, Package, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
     addCartItem,
     checkoutCart,
     clearCartItems,
+    createBuyerAssetUploadUrl,
+    getAuthMe,
     getCart,
-    getProductDetail
+    getProductDetail,
+    getSellerPublicProfile
 } from "@/lib/api/endpoints";
+import { readMizaStoredUser } from "@/hooks/use-miza-stored-user";
 import { writeCheckoutSuccessMeta } from "@/lib/checkout-success-storage";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { formatCartSelectionsLine } from "@/lib/format-cart-selections";
 import { cn, formatPeso, getAppName } from "@/lib/utils";
-import type { CartItemResponse, CartItemSelection, ProductDetail } from "@/types";
+import type { CartItemResponse, CartItemSelection, ProductDetail, SellerPublicProfile } from "@/types";
 
 type Step = 1 | 2 | 3;
 
 const fieldClass =
     "h-11 w-full border-x-0 border-t-0 border-b border-white/15 rounded-none bg-transparent px-0 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/60 focus-visible:ring-0 focus-visible:outline-none";
+
+const notesClass =
+    "min-h-[100px] w-full resize-y border-x-0 border-t-0 border-b border-white/15 rounded-none bg-transparent px-0 py-2 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/60 focus-visible:ring-0 focus-visible:outline-none";
 
 function formatEstimatedDeliveryRange(): string {
     const start = new Date();
@@ -71,20 +80,22 @@ function StepChip({
     done: boolean;
 }) {
     return (
-        <div className="flex flex-1 items-center gap-3">
+        <div className="flex flex-1 flex-col items-center gap-2 sm:flex-row sm:justify-center sm:gap-3">
             <div
                 className={cn(
-                    "flex h-9 w-9 shrink-0 items-center justify-center text-xs font-bold transition-colors",
-                    active || done
+                    "flex h-10 w-10 shrink-0 items-center justify-center text-xs font-bold transition-colors",
+                    active
                         ? "bg-(--accent) text-[#030608]"
-                        : "border border-white/20 bg-transparent text-(--muted)"
+                        : done
+                          ? "bg-(--accent)/25 text-(--accent)"
+                          : "border border-white/20 bg-transparent text-(--muted)"
                 )}
             >
                 {done ? "✓" : n}
             </div>
             <span
                 className={cn(
-                    "hidden text-[10px] font-semibold uppercase tracking-[0.18em] sm:block",
+                    "text-center text-[10px] font-semibold uppercase tracking-[0.18em] sm:text-left",
                     active || done ? "text-(--accent)" : "text-(--muted)"
                 )}
             >
@@ -93,6 +104,12 @@ function StepChip({
         </div>
     );
 }
+
+type OnlineSellerPayState = {
+    methodId: string;
+    receiptUrl: string;
+    receiptUploading: boolean;
+};
 
 export function BuyerCheckoutClient() {
     const router = useRouter();
@@ -111,13 +128,35 @@ export function BuyerCheckoutClient() {
     const [addressLine, setAddressLine] = useState("");
     const [city, setCity] = useState("");
     const [postalCode, setPostalCode] = useState("");
-    const [country, setCountry] = useState("Philippines");
-    const [largeTruckOk, setLargeTruckOk] = useState(false);
-    const [unloadHelpOk, setUnloadHelpOk] = useState(false);
-    const [floorNote, setFloorNote] = useState("");
+    const [deliveryNotes, setDeliveryNotes] = useState("");
 
     const [paymentMethod, setPaymentMethod] = useState<"cash" | "online">("cash");
-    const [paymentReference, setPaymentReference] = useState("");
+    const [sellerProfiles, setSellerProfiles] = useState<Record<string, SellerPublicProfile>>({});
+    const [onlineBySeller, setOnlineBySeller] = useState<Record<string, OnlineSellerPayState>>({});
+
+    const loadCartAndProducts = useCallback(async () => {
+        setLoadingCart(true);
+        try {
+            const { data } = await getCart();
+            setCartItems(data);
+            const nextMap: Record<string, ProductDetail> = {};
+            await Promise.all(
+                data.map(async (item) => {
+                    try {
+                        const r = await getProductDetail(item.productId);
+                        nextMap[item.productId] = r.data;
+                    } catch {
+                        /* product missing */
+                    }
+                })
+            );
+            setProductMap(nextMap);
+        } catch {
+            setCartItems([]);
+        } finally {
+            setLoadingCart(false);
+        }
+    }, []);
 
     useEffect(() => {
         const pb = searchParams.get("prepareBuy");
@@ -150,39 +189,48 @@ export function BuyerCheckoutClient() {
         if (searchParams.get("prepareBuy")) {
             return;
         }
+        void loadCartAndProducts();
+    }, [searchParams, loadCartAndProducts]);
+
+    useEffect(() => {
+        if (searchParams.get("prepareBuy")) {
+            return;
+        }
+        const onAuthChange = () => {
+            void loadCartAndProducts();
+        };
+        window.addEventListener("miza-auth-change", onAuthChange);
+        return () => window.removeEventListener("miza-auth-change", onAuthChange);
+    }, [searchParams, loadCartAndProducts]);
+
+    useEffect(() => {
+        if (searchParams.get("prepareBuy")) {
+            return;
+        }
         let cancelled = false;
-        void (async () => {
-            setLoadingCart(true);
-            try {
-                const { data } = await getCart();
-                if (cancelled) {
+        const local = readMizaStoredUser();
+        if (local?.email) {
+            setEmail((prev) => (prev.trim() ? prev : local.email));
+        }
+        if (local?.fullName?.trim()) {
+            setFullName((prev) => (prev.trim() ? prev : local.fullName!.trim()));
+        }
+        void getAuthMe()
+            .then((res) => {
+                if (cancelled || !res.user) {
                     return;
                 }
-                setCartItems(data);
-                const nextMap: Record<string, ProductDetail> = {};
-                await Promise.all(
-                    data.map(async (item) => {
-                        try {
-                            const r = await getProductDetail(item.productId);
-                            nextMap[item.productId] = r.data;
-                        } catch {
-                            /* product missing */
-                        }
-                    })
-                );
-                if (!cancelled) {
-                    setProductMap(nextMap);
+                const u = res.user;
+                if (u.email) {
+                    setEmail(u.email);
                 }
-            } catch {
-                if (!cancelled) {
-                    setCartItems([]);
+                if (u.fullName?.trim()) {
+                    setFullName(u.fullName.trim());
                 }
-            } finally {
-                if (!cancelled) {
-                    setLoadingCart(false);
-                }
-            }
-        })();
+            })
+            .catch(() => {
+                /* keep localStorage-backed values */
+            });
         return () => {
             cancelled = true;
         };
@@ -196,16 +244,143 @@ export function BuyerCheckoutClient() {
         }, 0);
     }, [cartItems, productMap]);
 
+    const sellerCheckoutGroups = useMemo(() => {
+        const m = new Map<string, CartItemResponse[]>();
+        for (const item of cartItems) {
+            const p = productMap[item.productId];
+            if (!p?.sellerId) {
+                continue;
+            }
+            const arr = m.get(p.sellerId) ?? [];
+            arr.push(item);
+            m.set(p.sellerId, arr);
+        }
+        return [...m.entries()].map(([sellerId, items]) => ({
+            sellerId,
+            items,
+            subtotal: items.reduce((sum, it) => {
+                const pr = productMap[it.productId];
+                return sum + (pr?.basePrice ?? 0) * it.quantity;
+            }, 0)
+        }));
+    }, [cartItems, productMap]);
+
+    const sellerIdsSignature = sellerCheckoutGroups.map((g) => g.sellerId).sort().join("|");
+
+    useEffect(() => {
+        setOnlineBySeller((prev) => {
+            const next: Record<string, OnlineSellerPayState> = { ...prev };
+            const ids = new Set(sellerCheckoutGroups.map((g) => g.sellerId));
+            for (const id of ids) {
+                if (!next[id]) {
+                    next[id] = { methodId: "", receiptUrl: "", receiptUploading: false };
+                }
+            }
+            for (const k of Object.keys(next)) {
+                if (!ids.has(k)) {
+                    delete next[k];
+                }
+            }
+            return next;
+        });
+    }, [sellerIdsSignature]);
+
+    useEffect(() => {
+        if (cartItems.length === 0) {
+            return;
+        }
+        const ids = [
+            ...new Set(
+                cartItems
+                    .map((i) => productMap[i.productId]?.sellerId)
+                    .filter((x): x is string => Boolean(x))
+            )
+        ];
+        let cancelled = false;
+        void Promise.all(
+            ids.map(async (sid) => {
+                try {
+                    const r = await getSellerPublicProfile(sid);
+                    if (!cancelled && r.data) {
+                        setSellerProfiles((p) => ({ ...p, [sid]: r.data }));
+                    }
+                } catch {
+                    /* ignore */
+                }
+            })
+        );
+        return () => {
+            cancelled = true;
+        };
+    }, [cartItems, productMap]);
+
+    const uploadReceiptProof = useCallback(async (sellerId: string, file: File) => {
+        setOnlineBySeller((p) => ({
+            ...p,
+            [sellerId]: {
+                ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
+                receiptUploading: true
+            }
+        }));
+        try {
+            const target = await createBuyerAssetUploadUrl(file.name, "payment-receipt");
+            const put = await putToSignedUploadUrl(target.uploadUrl, file);
+            if (!put.ok) {
+                throw new Error("Upload failed");
+            }
+            const url = target.publicUrl ?? target.uploadUrl;
+            setOnlineBySeller((p) => ({
+                ...p,
+                [sellerId]: {
+                    ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
+                    receiptUrl: url,
+                    receiptUploading: false
+                }
+            }));
+            toast.success("Receipt uploaded");
+        } catch {
+            toast.error("Could not upload receipt");
+            setOnlineBySeller((p) => ({
+                ...p,
+                [sellerId]: {
+                    ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
+                    receiptUploading: false
+                }
+            }));
+        }
+    }, []);
+
     const canContinueStep1 =
         fullName.trim().length > 1 &&
         email.includes("@") &&
         addressLine.trim().length > 3 &&
         city.trim().length > 0 &&
-        postalCode.trim().length > 0 &&
-        country.trim().length > 0;
+        postalCode.trim().length > 0;
+
+    const canProceedPaymentStep = useMemo(() => {
+        if (paymentMethod === "cash") {
+            return true;
+        }
+        if (sellerCheckoutGroups.length === 0) {
+            return false;
+        }
+        for (const g of sellerCheckoutGroups) {
+            const profile = sellerProfiles[g.sellerId];
+            const methods = profile?.paymentMethods ?? [];
+            if (methods.length === 0) {
+                return false;
+            }
+            const row = onlineBySeller[g.sellerId];
+            if (!row?.methodId || !row.receiptUrl.trim()) {
+                return false;
+            }
+        }
+        return true;
+    }, [paymentMethod, sellerCheckoutGroups, sellerProfiles, onlineBySeller]);
 
     const canPlaceOrder =
-        paymentMethod === "cash" || (paymentMethod === "online" && paymentReference.trim().length > 0);
+        cartItems.length > 0 &&
+        (paymentMethod === "cash" || (paymentMethod === "online" && canProceedPaymentStep));
 
     async function handlePlaceOrder() {
         if (!canPlaceOrder || cartItems.length === 0) {
@@ -215,25 +390,35 @@ export function BuyerCheckoutClient() {
         try {
             const result = await checkoutCart({
                 paymentMethod,
-                ...(paymentMethod === "online" && paymentReference.trim()
-                    ? { paymentReference: paymentReference.trim() }
+                ...(paymentMethod === "online"
+                    ? {
+                          onlinePayments: sellerCheckoutGroups.map((g) => ({
+                              sellerId: g.sellerId,
+                              sellerPaymentMethodId: onlineBySeller[g.sellerId]!.methodId,
+                              receiptProofUrl: onlineBySeller[g.sellerId]!.receiptUrl
+                          }))
+                      }
                     : {})
             });
             const estimatedDeliveryRange = formatEstimatedDeliveryRange();
-            writeCheckoutSuccessMeta(result.id, {
-                fullName: fullName.trim(),
-                email: email.trim(),
-                addressLine: addressLine.trim(),
-                city: city.trim(),
-                postalCode: postalCode.trim(),
-                country: country.trim(),
-                largeTruckOk,
-                unloadHelpOk,
-                floorNote: floorNote.trim(),
-                estimatedDeliveryRange
-            });
-            toast.success("Order placed");
-            router.push(`/buyer/orders/success?orderId=${encodeURIComponent(result.id)}`);
+            const notes = deliveryNotes.trim();
+            const orders = result.orders;
+            if (orders.length === 1) {
+                writeCheckoutSuccessMeta(orders[0].id, {
+                    fullName: fullName.trim(),
+                    email: email.trim(),
+                    addressLine: addressLine.trim(),
+                    city: city.trim(),
+                    postalCode: postalCode.trim(),
+                    ...(notes ? { deliveryNotes: notes } : {}),
+                    estimatedDeliveryRange
+                });
+                toast.success("Order placed");
+                router.push(`/buyer/orders/success?orderId=${encodeURIComponent(orders[0].id)}`);
+            } else {
+                toast.success(`Placed ${orders.length} orders.`);
+                router.push("/buyer/orders");
+            }
         } catch (e) {
             toast.error(e instanceof Error ? e.message : "Checkout failed");
         } finally {
@@ -243,6 +428,104 @@ export function BuyerCheckoutClient() {
 
     const emptyCart = !loadingCart && cartItems.length === 0;
 
+    const orderSummaryAside = (
+        <aside className="lg:sticky lg:top-28 lg:self-start">
+            <div className="rounded-xl border border-white/10 bg-[#0c1018]/95 p-6 shadow-[0_0_60px_-24px_rgba(34,199,243,0.28)] backdrop-blur-sm">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-(--accent)">
+                    Order summary
+                </p>
+                <div className="mt-6 max-h-[min(52vh,420px)] space-y-4 overflow-y-auto pr-1">
+                    {loadingCart ? (
+                        <p className="text-sm text-(--muted)">Loading cart…</p>
+                    ) : (
+                        cartItems.map((item) => {
+                            const p = productMap[item.productId];
+                            const thumb =
+                                p?.thumbnailUrl?.trim() || p?.media[0]?.url || null;
+                            const title = p?.title ?? item.productId;
+                            const line = (p?.basePrice ?? 0) * item.quantity;
+                            const specLine = formatCartSelectionsLine(p, item.selections);
+                            return (
+                                <div
+                                    key={item.id}
+                                    className="flex gap-3 border-b border-white/5 pb-4 last:border-0 last:pb-0"
+                                >
+                                    <div className="h-16 w-16 shrink-0 overflow-hidden bg-[#12161f]">
+                                        {thumb ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                src={thumb}
+                                                alt=""
+                                                className="h-full w-full object-cover"
+                                            />
+                                        ) : (
+                                            <div className="flex h-full items-center justify-center text-[10px] text-(--muted)">
+                                                —
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-semibold leading-snug text-foreground">
+                                            {title}
+                                        </p>
+                                        <p className="mt-1 text-xs text-(--muted)">Qty {item.quantity}</p>
+                                        {specLine ? (
+                                            <p className="mt-1 text-xs text-(--muted)/90">{specLine}</p>
+                                        ) : null}
+                                        <p className="mt-1 text-sm font-semibold tabular-nums text-(--accent)">
+                                            {formatPeso(line)}
+                                        </p>
+                                    </div>
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+                <div className="mt-6 space-y-2 border-t border-white/10 pt-6 text-sm">
+                    <div className="flex justify-between gap-4 text-(--muted)">
+                        <span>Subtotal</span>
+                        <span className="shrink-0 tabular-nums text-foreground">
+                            {formatPeso(subtotal)}
+                        </span>
+                    </div>
+                    <div className="flex justify-between gap-4 text-(--muted)">
+                        <span>Shipping</span>
+                        <span className="max-w-[55%] text-right text-xs leading-snug text-foreground">
+                            Arranged with seller
+                        </span>
+                    </div>
+                    <div className="flex justify-between gap-4 text-(--muted)">
+                        <span>Taxes</span>
+                        <span className="text-right text-xs text-foreground">As applicable</span>
+                    </div>
+                    <div className="flex justify-between border-t border-white/10 pt-3 text-base font-bold">
+                        <span>Total</span>
+                        <span className="tabular-nums text-(--accent)">{formatPeso(subtotal)}</span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-(--muted)">
+                        Delivery fees and any taxes are confirmed with your seller before payment is
+                        finalized.
+                    </p>
+                </div>
+                <div className="mt-6 flex items-start gap-3 border-l-2 border-(--accent)/70 bg-black/25 px-4 py-3">
+                    <ShieldCheck
+                        className="mt-0.5 h-5 w-5 shrink-0 text-(--accent)"
+                        aria-hidden
+                    />
+                    <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-foreground">
+                            Secure checkout
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed text-(--muted)">
+                            Pay only through options your seller shares on the order. Keep proof of
+                            payment when required.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    );
+
     return (
         <main className="relative min-h-screen flex-1 overflow-hidden bg-[#050508] text-foreground">
             <div
@@ -250,25 +533,34 @@ export function BuyerCheckoutClient() {
                 aria-hidden
             />
             <div className="relative z-10 mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
-                <div className="mb-10 flex flex-wrap items-center justify-between gap-4">
-                    <Link
-                        href="/products"
-                        className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted) transition hover:text-(--accent)"
-                    >
-                        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-                        Back to shop
-                    </Link>
+                <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex flex-wrap items-center gap-4">
+                        <Link
+                            href="/cart"
+                            className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted) transition hover:text-(--accent)"
+                        >
+                            <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+                            Back to cart
+                        </Link>
+                        <span className="hidden h-4 w-px bg-white/15 sm:block" aria-hidden />
+                        <Link
+                            href="/products"
+                            className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted) transition hover:text-(--accent)"
+                        >
+                            Continue shopping
+                        </Link>
+                    </div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-(--accent)">
                         {appName}
                     </p>
                 </div>
 
-                <div className="mb-10 flex flex-col gap-4 border-b border-white/10 pb-8 sm:flex-row sm:items-center">
-                    <StepChip n={1} label="Shipping" active={step === 1} done={step > 1} />
-                    <div className="hidden h-px flex-1 bg-white/10 sm:block" aria-hidden />
-                    <StepChip n={2} label="Payment" active={step === 2} done={step > 2} />
-                    <div className="hidden h-px flex-1 bg-white/10 sm:block" aria-hidden />
-                    <StepChip n={3} label="Review" active={step === 3} done={false} />
+                <div className="mb-10 flex flex-col items-center gap-6 border-b border-white/10 pb-10">
+                    <div className="flex w-full max-w-xl flex-col justify-center gap-6 sm:max-w-2xl sm:flex-row sm:items-start">
+                        <StepChip n={1} label="Shipping" active={step === 1} done={step > 1} />
+                        <StepChip n={2} label="Payment" active={step === 2} done={step > 2} />
+                        <StepChip n={3} label="Review" active={step === 3} done={false} />
+                    </div>
                 </div>
 
                 {emptyCart ? (
@@ -276,7 +568,7 @@ export function BuyerCheckoutClient() {
                         <Package className="mx-auto h-12 w-12 text-(--accent)/40" aria-hidden />
                         <h1 className="mt-6 text-2xl font-bold tracking-tight">Your cart is empty</h1>
                         <p className="mt-3 text-sm text-(--muted)">
-                            Add something you love, then come back here to finish your order.
+                            Add items from the shop, then return here to complete your order.
                         </p>
                         <Link
                             href="/products"
@@ -286,20 +578,19 @@ export function BuyerCheckoutClient() {
                         </Link>
                     </div>
                 ) : (
-                    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] lg:gap-14">
+                    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] lg:gap-14 lg:items-start">
                         <div className="min-w-0 space-y-10">
                             {step === 1 ? (
                                 <section>
                                     <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                                        Shipping & delivery
+                                        Shipping details
                                     </h1>
                                     <p className="mt-3 max-w-xl text-sm leading-relaxed text-(--muted)">
-                                        Tell us where to send your order. Heavy stone pieces may need
-                                        a large truck or help unloading—we use this to coordinate with
-                                        the seller.
+                                        Where should we send this order? Your seller may contact you
+                                        to confirm delivery timing and fees.
                                     </p>
                                     <div className="mt-10 grid gap-8 sm:grid-cols-2">
-                                        <div className="sm:col-span-2">
+                                        <div>
                                             <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
                                                 Full name
                                             </Label>
@@ -307,11 +598,11 @@ export function BuyerCheckoutClient() {
                                                 className={cn(fieldClass, "mt-2")}
                                                 value={fullName}
                                                 onChange={(e) => setFullName(e.target.value)}
-                                                placeholder="Your name"
+                                                placeholder="Name on the package"
                                                 autoComplete="name"
                                             />
                                         </div>
-                                        <div className="sm:col-span-2">
+                                        <div>
                                             <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
                                                 Email
                                             </Label>
@@ -332,7 +623,7 @@ export function BuyerCheckoutClient() {
                                                 className={cn(fieldClass, "mt-2")}
                                                 value={addressLine}
                                                 onChange={(e) => setAddressLine(e.target.value)}
-                                                placeholder="House / unit, street, area"
+                                                placeholder="Unit, street, barangay or district"
                                                 autoComplete="street-address"
                                             />
                                         </div>
@@ -358,71 +649,35 @@ export function BuyerCheckoutClient() {
                                                 autoComplete="postal-code"
                                             />
                                         </div>
-                                        <div className="sm:col-span-2">
-                                            <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
-                                                Country
-                                            </Label>
-                                            <select
-                                                className={cn(
-                                                    fieldClass,
-                                                    "mt-2 cursor-pointer bg-[#050508] py-2"
-                                                )}
-                                                value={country}
-                                                onChange={(e) => setCountry(e.target.value)}
-                                            >
-                                                <option value="Philippines">Philippines</option>
-                                                <option value="Other">Other</option>
-                                            </select>
-                                        </div>
                                     </div>
 
                                     <div className="mt-10 border-l-2 border-(--accent) bg-[#080b10]/80 px-5 py-6">
-                                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-(--accent)">
-                                            Delivery requirements
-                                        </p>
+                                        <Label
+                                            htmlFor="checkout-delivery-notes"
+                                            className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)"
+                                        >
+                                            Delivery notes
+                                        </Label>
                                         <p className="mt-2 text-sm text-(--muted)">
-                                            Help the seller plan delivery to your location.
+                                            Optional — access instructions, landmarks, or preferred
+                                            contact times.
                                         </p>
-                                        <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm">
-                                            <input
-                                                type="checkbox"
-                                                checked={largeTruckOk}
-                                                onChange={(e) => setLargeTruckOk(e.target.checked)}
-                                                className="mt-1 h-4 w-4 rounded border-white/30 bg-transparent text-(--accent) focus:ring-(--accent)/40"
-                                            />
-                                            <span>A large delivery truck can reach my address</span>
-                                        </label>
-                                        <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
-                                            <input
-                                                type="checkbox"
-                                                checked={unloadHelpOk}
-                                                onChange={(e) => setUnloadHelpOk(e.target.checked)}
-                                                className="mt-1 h-4 w-4 rounded border-white/30 bg-transparent text-(--accent) focus:ring-(--accent)/40"
-                                            />
-                                            <span>
-                                                I have a safe way to unload heavy items (e.g. crew or
-                                                equipment on site)
-                                            </span>
-                                        </label>
-                                        <div className="mt-6">
-                                            <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
-                                                Floor or building note (optional)
-                                            </Label>
-                                            <Input
-                                                className={cn(fieldClass, "mt-2")}
-                                                value={floorNote}
-                                                onChange={(e) => setFloorNote(e.target.value)}
-                                                placeholder="e.g. 3rd floor, gate code, landmark"
-                                            />
-                                        </div>
+                                        <Textarea
+                                            id="checkout-delivery-notes"
+                                            className={cn(notesClass, "mt-4")}
+                                            value={deliveryNotes}
+                                            onChange={(e) => setDeliveryNotes(e.target.value)}
+                                            placeholder="e.g. Gate code, building name, best hours to call"
+                                            rows={4}
+                                        />
                                     </div>
 
-                                    <div className="mt-10 flex justify-end">
+                                    <div className="mt-10 flex justify-center sm:justify-end">
                                         <Button
                                             type="button"
                                             disabled={!canContinueStep1}
                                             onClick={() => setStep(2)}
-                                            className="h-12 min-w-[200px] bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110"
+                                            className="h-12 w-full max-w-md bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110 sm:w-auto sm:min-w-[240px]"
                                         >
                                             Continue to payment
                                             <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
@@ -445,8 +700,8 @@ export function BuyerCheckoutClient() {
                                         Payment
                                     </h1>
                                     <p className="mt-3 max-w-xl text-sm text-(--muted)">
-                                        Choose how you will pay. The seller may confirm details with
-                                        you in chat or on the order.
+                                        Choose how you plan to pay. The seller may confirm details on
+                                        the order or in messages.
                                     </p>
                                     <div className="mt-10 space-y-6">
                                         <div className="flex flex-wrap gap-3">
@@ -476,24 +731,194 @@ export function BuyerCheckoutClient() {
                                             </button>
                                         </div>
                                         {paymentMethod === "online" ? (
-                                            <div>
-                                                <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
-                                                    Payment reference
-                                                </Label>
-                                                <Input
-                                                    className={cn(fieldClass, "mt-2")}
-                                                    value={paymentReference}
-                                                    onChange={(e) => setPaymentReference(e.target.value)}
-                                                    placeholder="Reference number or receipt ID"
-                                                />
+                                            <div className="space-y-8">
+                                                <p className="text-xs leading-relaxed text-(--muted)">
+                                                    Pay each seller using one of their listed methods.
+                                                    All items from the same seller share one payment and
+                                                    one receipt.
+                                                </p>
+                                                {sellerCheckoutGroups.map((group) => {
+                                                    const profile = sellerProfiles[group.sellerId];
+                                                    const methods = profile?.paymentMethods ?? [];
+                                                    const row = onlineBySeller[group.sellerId];
+                                                    const business =
+                                                        profile?.businessName ?? "Seller checkout";
+                                                    return (
+                                                        <div
+                                                            key={group.sellerId}
+                                                            className="border border-white/10 bg-[#080b10]/80 px-5 py-6"
+                                                        >
+                                                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
+                                                                {business}
+                                                            </p>
+                                                            <p className="mt-1 text-xs text-(--muted)">
+                                                                {group.items.length} line
+                                                                {group.items.length === 1 ? "" : "s"} ·{" "}
+                                                                {formatPeso(group.subtotal)}
+                                                            </p>
+                                                            {methods.length === 0 ? (
+                                                                <p className="mt-4 text-sm text-amber-200/90">
+                                                                    This seller has not added online
+                                                                    payment details. Use cash on delivery
+                                                                    or remove their items to continue with
+                                                                    online payment.
+                                                                </p>
+                                                            ) : (
+                                                                <>
+                                                                    <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
+                                                                        Payment method
+                                                                    </p>
+                                                                    <div className="mt-3 flex flex-col gap-2">
+                                                                        {methods.map((m) => (
+                                                                            <label
+                                                                                key={m.id}
+                                                                                className={cn(
+                                                                                    "flex cursor-pointer flex-col gap-1 border px-4 py-3 text-sm transition",
+                                                                                    row?.methodId === m.id
+                                                                                        ? "border-(--accent) bg-(--accent)/10"
+                                                                                        : "border-white/15 hover:border-white/30"
+                                                                                )}
+                                                                            >
+                                                                                <input
+                                                                                    type="radio"
+                                                                                    className="sr-only"
+                                                                                    name={`pay-${group.sellerId}`}
+                                                                                    checked={
+                                                                                        row?.methodId === m.id
+                                                                                    }
+                                                                                    onChange={() =>
+                                                                                        setOnlineBySeller(
+                                                                                            (p) => ({
+                                                                                                ...p,
+                                                                                                [group.sellerId]:
+                                                                                                    {
+                                                                                                        ...(p[
+                                                                                                            group
+                                                                                                                .sellerId
+                                                                                                        ] ?? {
+                                                                                                            methodId:
+                                                                                                                "",
+                                                                                                            receiptUrl:
+                                                                                                                "",
+                                                                                                            receiptUploading:
+                                                                                                                false
+                                                                                                        }),
+                                                                                                        methodId: m.id
+                                                                                                    }
+                                                                                            })
+                                                                                        )
+                                                                                    }
+                                                                                />
+                                                                                <div className="flex flex-wrap items-start justify-between gap-4">
+                                                                                    <div className="min-w-0 flex-1 space-y-1">
+                                                                                        <span className="block font-semibold text-foreground">
+                                                                                            {m.methodName}
+                                                                                        </span>
+                                                                                        <span className="block text-xs text-(--muted)">
+                                                                                            {m.accountName} ·{" "}
+                                                                                            {m.accountNumber}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    {m.qrImageUrl?.trim() ? (
+                                                                                        <div className="shrink-0 text-center">
+                                                                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                                            <img
+                                                                                                src={m.qrImageUrl.trim()}
+                                                                                                alt=""
+                                                                                                className="mx-auto h-28 w-28 rounded border border-white/15 bg-white object-contain p-1"
+                                                                                            />
+                                                                                            <p className="mt-1.5 text-[9px] font-medium uppercase tracking-wide text-(--muted)">
+                                                                                                Scan to pay
+                                                                                            </p>
+                                                                                        </div>
+                                                                                    ) : null}
+                                                                                </div>
+                                                                            </label>
+                                                                        ))}
+                                                                    </div>
+                                                                    <div className="mt-6">
+                                                                        <Label
+                                                                            htmlFor={`receipt-${group.sellerId}`}
+                                                                            className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)"
+                                                                        >
+                                                                            Payment receipt (image)
+                                                                        </Label>
+                                                                        <input
+                                                                            id={`receipt-${group.sellerId}`}
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            className="mt-2 block w-full text-xs text-(--muted) file:mr-3 file:border-0 file:bg-(--accent) file:px-3 file:py-2 file:text-[10px] file:font-bold file:uppercase file:tracking-wide file:text-[#030608]"
+                                                                            disabled={row?.receiptUploading}
+                                                                            onChange={(e) => {
+                                                                                const f =
+                                                                                    e.target.files?.[0];
+                                                                                if (f) {
+                                                                                    void uploadReceiptProof(
+                                                                                        group.sellerId,
+                                                                                        f
+                                                                                    );
+                                                                                }
+                                                                                e.target.value = "";
+                                                                            }}
+                                                                        />
+                                                                        {row?.receiptUploading ? (
+                                                                            <p className="mt-2 text-xs text-(--muted)">
+                                                                                Uploading…
+                                                                            </p>
+                                                                        ) : null}
+                                                                        {row?.receiptUrl ? (
+                                                                            <div className="mt-3 flex items-start gap-3">
+                                                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                                <img
+                                                                                    src={row.receiptUrl}
+                                                                                    alt="Receipt preview"
+                                                                                    className="h-24 w-auto max-w-full rounded border border-white/10 object-contain"
+                                                                                />
+                                                                                <button
+                                                                                    type="button"
+                                                                                    className="text-[10px] font-semibold uppercase tracking-wide text-(--accent)"
+                                                                                    onClick={() =>
+                                                                                        setOnlineBySeller(
+                                                                                            (p) => ({
+                                                                                                ...p,
+                                                                                                [group.sellerId]:
+                                                                                                    {
+                                                                                                        ...(p[
+                                                                                                            group
+                                                                                                                .sellerId
+                                                                                                        ] ?? {
+                                                                                                            methodId:
+                                                                                                                "",
+                                                                                                            receiptUrl:
+                                                                                                                "",
+                                                                                                            receiptUploading:
+                                                                                                                false
+                                                                                                        }),
+                                                                                                        receiptUrl: ""
+                                                                                                    }
+                                                                                            })
+                                                                                        )
+                                                                                    }
+                                                                                >
+                                                                                    Remove
+                                                                                </button>
+                                                                            </div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         ) : null}
                                     </div>
-                                    <div className="mt-10 flex justify-end">
+                                    <div className="mt-10 flex justify-center sm:justify-end">
                                         <Button
                                             type="button"
+                                            disabled={!canProceedPaymentStep}
                                             onClick={() => setStep(3)}
-                                            className="h-12 min-w-[200px] bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110"
+                                            className="h-12 w-full max-w-md bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110 sm:w-auto sm:min-w-[240px]"
                                         >
                                             Review order
                                             <ArrowRight className="ml-2 h-4 w-4" aria-hidden />
@@ -513,59 +938,83 @@ export function BuyerCheckoutClient() {
                                         Back
                                     </button>
                                     <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                                        Review & place order
+                                        Review your order
                                     </h1>
                                     <div className="mt-8 space-y-6 rounded-xl border border-white/10 bg-[#080b10]/60 p-6 text-sm">
                                         <div>
                                             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
                                                 Ship to
                                             </p>
-                                            <p className="mt-2 font-medium text-foreground">
-                                                {fullName}
-                                            </p>
+                                            <p className="mt-2 font-medium text-foreground">{fullName}</p>
                                             <p className="text-(--muted)">{email}</p>
                                             <p className="mt-2 text-(--muted)">
-                                                {addressLine}, {city} {postalCode}, {country}
+                                                {addressLine}, {city} {postalCode}
                                             </p>
                                         </div>
-                                        <div>
-                                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                                                Delivery notes
-                                            </p>
-                                            <ul className="mt-2 list-inside list-disc text-(--muted)">
-                                                <li>
-                                                    Large truck: {largeTruckOk ? "Yes" : "Not confirmed"}
-                                                </li>
-                                                <li>
-                                                    Unload help: {unloadHelpOk ? "Yes" : "Not confirmed"}
-                                                </li>
-                                                {floorNote.trim() ? (
-                                                    <li>Notes: {floorNote.trim()}</li>
-                                                ) : null}
-                                            </ul>
-                                        </div>
+                                        {deliveryNotes.trim() ? (
+                                            <div>
+                                                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
+                                                    Delivery notes
+                                                </p>
+                                                <p className="mt-2 whitespace-pre-wrap text-(--muted)">
+                                                    {deliveryNotes.trim()}
+                                                </p>
+                                            </div>
+                                        ) : null}
                                         <div>
                                             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
                                                 Payment
                                             </p>
-                                            <p className="mt-2 text-foreground">
-                                                {paymentMethod === "cash"
-                                                    ? "Cash on delivery / meet-up"
-                                                    : "Online payment"}
-                                            </p>
-                                            {paymentMethod === "online" && paymentReference.trim() ? (
-                                                <p className="text-xs text-(--muted)">
-                                                    Ref: {paymentReference.trim()}
+                                            {paymentMethod === "cash" ? (
+                                                <p className="mt-2 text-foreground">
+                                                    Cash on delivery / meet-up
                                                 </p>
-                                            ) : null}
+                                            ) : (
+                                                <ul className="mt-3 space-y-4 text-(--muted)">
+                                                    {sellerCheckoutGroups.map((g) => {
+                                                        const profile = sellerProfiles[g.sellerId];
+                                                        const mid = onlineBySeller[g.sellerId]?.methodId;
+                                                        const method = profile?.paymentMethods.find(
+                                                            (m) => m.id === mid
+                                                        );
+                                                        return (
+                                                            <li key={g.sellerId}>
+                                                                <p className="font-medium text-foreground">
+                                                                    {profile?.businessName ?? "Seller"}
+                                                                </p>
+                                                                <p className="mt-1 text-sm">
+                                                                    {method
+                                                                        ? `${method.methodName} · ${method.accountName}`
+                                                                        : "Online payment"}
+                                                                </p>
+                                                                {method?.qrImageUrl?.trim() ? (
+                                                                    <div className="mt-3">
+                                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                        <img
+                                                                            src={method.qrImageUrl.trim()}
+                                                                            alt=""
+                                                                            className="h-24 w-24 rounded border border-white/15 bg-white object-contain p-1"
+                                                                        />
+                                                                    </div>
+                                                                ) : null}
+                                                                {onlineBySeller[g.sellerId]?.receiptUrl ? (
+                                                                    <p className="mt-1 text-xs">
+                                                                        Receipt image attached
+                                                                    </p>
+                                                                ) : null}
+                                                            </li>
+                                                        );
+                                                    })}
+                                                </ul>
+                                            )}
                                         </div>
                                     </div>
-                                    <div className="mt-10 flex justify-end">
+                                    <div className="mt-10 flex justify-center sm:justify-end">
                                         <Button
                                             type="button"
                                             disabled={submitting || !canPlaceOrder}
                                             onClick={() => void handlePlaceOrder()}
-                                            className="h-12 min-w-[220px] bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110"
+                                            className="h-12 w-full max-w-md bg-(--accent) text-xs font-bold uppercase tracking-[0.16em] text-[#030608] hover:brightness-110 sm:w-auto sm:min-w-[260px]"
                                         >
                                             {submitting ? "Placing order…" : "Place order"}
                                         </Button>
@@ -574,98 +1023,7 @@ export function BuyerCheckoutClient() {
                             ) : null}
                         </div>
 
-                        <aside className="lg:sticky lg:top-28 lg:self-start">
-                            <div className="rounded-xl border border-white/10 bg-[#0c1018] p-6 shadow-[0_0_60px_-24px_rgba(34,199,243,0.35)]">
-                                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-(--accent)">
-                                    Order summary
-                                </p>
-                                <h2 className="mt-2 text-lg font-bold tracking-tight">Your items</h2>
-                                <div className="mt-6 space-y-4">
-                                    {loadingCart ? (
-                                        <p className="text-sm text-(--muted)">Loading cart…</p>
-                                    ) : (
-                                        cartItems.map((item) => {
-                                            const p = productMap[item.productId];
-                                            const thumb =
-                                                p?.thumbnailUrl?.trim() ||
-                                                p?.media[0]?.url ||
-                                                null;
-                                            const title = p?.title ?? item.productId;
-                                            const line = (p?.basePrice ?? 0) * item.quantity;
-                                            const specLine = formatCartSelectionsLine(p, item.selections);
-                                            return (
-                                                <div
-                                                    key={item.id}
-                                                    className="flex gap-3 border-b border-white/5 pb-4 last:border-0 last:pb-0"
-                                                >
-                                                    <div className="h-16 w-16 shrink-0 overflow-hidden bg-[#12161f]">
-                                                        {thumb ? (
-                                                            // eslint-disable-next-line @next/next/no-img-element
-                                                            <img
-                                                                src={thumb}
-                                                                alt=""
-                                                                className="h-full w-full object-cover"
-                                                            />
-                                                        ) : (
-                                                            <div className="flex h-full items-center justify-center text-[10px] text-(--muted)">
-                                                                —
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <div className="min-w-0 flex-1">
-                                                        <p className="text-sm font-semibold leading-snug text-foreground">
-                                                            {title}
-                                                        </p>
-                                                        <p className="mt-1 text-xs text-(--muted)">
-                                                            Qty {item.quantity}
-                                                        </p>
-                                                        {specLine ? (
-                                                            <p className="mt-1 text-xs text-(--muted)">
-                                                                {specLine}
-                                                            </p>
-                                                        ) : null}
-                                                        <p className="mt-1 text-sm font-semibold text-(--accent)">
-                                                            {formatPeso(line)}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })
-                                    )}
-                                </div>
-                                <div className="mt-6 space-y-2 border-t border-white/10 pt-6 text-sm">
-                                    <div className="flex justify-between text-(--muted)">
-                                        <span>Subtotal</span>
-                                        <span className="tabular-nums text-foreground">
-                                            {formatPeso(subtotal)}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between text-(--muted)">
-                                        <span>Shipping & crating</span>
-                                        <span className="text-foreground">Arranged with seller</span>
-                                    </div>
-                                    <div className="flex justify-between pt-2 text-base font-bold">
-                                        <span>Total</span>
-                                        <span className="tabular-nums text-(--accent)">
-                                            {formatPeso(subtotal)}
-                                        </span>
-                                    </div>
-                                    <p className="pt-2 text-xs italic text-(--muted)">
-                                        Final total may include delivery fees the seller confirms with
-                                        you.
-                                    </p>
-                                </div>
-                                <div className="mt-6 border-l-2 border-(--accent)/80 bg-black/20 px-4 py-3">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-(--accent)">
-                                        {appName} trust
-                                    </p>
-                                    <p className="mt-1 text-xs leading-relaxed text-(--muted)">
-                                        Orders are tied to your account. Pay and receive items only
-                                        through agreed channels with verified sellers.
-                                    </p>
-                                </div>
-                            </div>
-                        </aside>
+                        {orderSummaryAside}
                     </div>
                 )}
             </div>

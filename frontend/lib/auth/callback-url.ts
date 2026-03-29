@@ -27,7 +27,12 @@ export function parseSafeCallbackUrl(raw: string | null | undefined): string | n
  * Avoid sending sellers/admins to buyer-only routes (and vice versa) after auth.
  */
 export function isCallbackAllowedForRole(path: string, role: string): boolean {
-    if (path.startsWith("/products") || path.startsWith("/sellers") || path === "/") {
+    if (
+        path.startsWith("/products") ||
+        path.startsWith("/sellers") ||
+        path.startsWith("/cart") ||
+        path === "/"
+    ) {
         return true;
     }
     if (role === "buyer" && path.startsWith("/buyer")) {

@@ -10,6 +10,15 @@ export interface Order {
   receiptRequestNote?: string;
   totalAmount: number;
   createdAt: string;
+  receiptProofUrl?: string;
+  sellerPaymentMethodId?: string;
+}
+
+/** One row in POST /checkout when paying online (one per seller in the cart). */
+export interface CheckoutOnlinePaymentLine {
+  sellerId: string;
+  sellerPaymentMethodId: string;
+  receiptProofUrl: string;
 }
 
 /** Chosen listing options for a cart or order line (matches API `selections`). */
@@ -43,9 +52,9 @@ export interface CheckoutSuccessDisplayMeta {
   addressLine: string;
   city: string;
   postalCode: string;
-  country: string;
-  largeTruckOk: boolean;
-  unloadHelpOk: boolean;
-  floorNote: string;
+  /** Optional buyer notes for the seller (access, timing, landmarks). */
+  deliveryNotes?: string;
   estimatedDeliveryRange: string;
+  /** Legacy session entries may still include this field. */
+  country?: string;
 }

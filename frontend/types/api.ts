@@ -105,10 +105,14 @@ export interface CartResponse {
   data: CartItemResponse[];
 }
 
-export interface CheckoutResponse {
+export interface CheckoutOrderSummary {
   id: string;
-  status: "created";
+  sellerId: string;
   totalAmount: number;
+}
+
+export interface CheckoutResponse {
+  orders: CheckoutOrderSummary[];
 }
 
 export interface OrderDetailResponse {

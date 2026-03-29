@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CreditCard, Lock, Minus, Package, Plus, Shield, Trash2, Truck } from "lucide-react";
+import { CreditCard, Lock, Minus, Package, Plus, Shield, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
     getCart,
@@ -10,6 +10,7 @@ import {
     removeCartItem,
     updateCartItemQuantity
 } from "@/lib/api/endpoints";
+import { useMizaStoredUser } from "@/hooks/use-miza-stored-user";
 import { formatCartSelectionsLine } from "@/lib/format-cart-selections";
 import { cn, formatPeso, getAppName } from "@/lib/utils";
 import type { CartItemResponse, ProductDetail } from "@/types";
@@ -22,11 +23,20 @@ function maxQtyForProduct(p: ProductDetail | undefined): number {
 
 export function CartRegistryClient() {
     const appName = getAppName();
+    const { user } = useMizaStoredUser();
     const [items, setItems] = useState<CartItemResponse[]>([]);
     const [productMap, setProductMap] = useState<Record<string, ProductDetail>>({});
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+
+    const checkoutHref = useMemo(() => {
+        if (user?.role === "buyer") {
+            return "/buyer/checkout";
+        }
+        const q = encodeURIComponent("/buyer/checkout");
+        return `/auth/login?callbackUrl=${q}`;
+    }, [user]);
 
     const refreshCart = useCallback(async () => {
         setLoadError(null);
@@ -128,8 +138,9 @@ export function CartRegistryClient() {
                 </p>
                 <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Cart Items</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-relaxed text-(--muted)">
-                    Review your selections before requisition. Sign in as a shopper to complete
-                    checkout.
+                    {user?.role === "buyer"
+                        ? "Review your items, then continue to shipping and payment."
+                        : "Review your cart. Sign in with a buyer account to complete checkout."}
                 </p>
 
                 {loadError ? (
@@ -332,12 +343,14 @@ export function CartRegistryClient() {
                                     </p>
                                 </div>
                                 <Link
-                                    href="/buyer/checkout"
+                                    href={checkoutHref}
                                     className={cn(
                                         "mt-6 flex h-12 w-full items-center justify-center bg-(--accent) text-center text-sm font-bold uppercase tracking-[0.12em] text-[#030608] transition hover:brightness-110"
                                     )}
                                 >
-                                    Proceed to checkout
+                                    {user?.role === "buyer"
+                                        ? "Proceed to checkout"
+                                        : "Sign in to checkout"}
                                 </Link>
 
                                 <div className="mt-6 flex items-center justify-center gap-6 text-(--muted)">

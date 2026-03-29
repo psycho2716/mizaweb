@@ -26,6 +26,7 @@ import {
     updateSellerPassword,
     updateSellerProfile
 } from "@/lib/api/endpoints";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import type { SellerPaymentMethod, SellerPublicProfile } from "@/types";
 import { toast } from "sonner";
@@ -133,11 +134,7 @@ export default function SellerProfilePage() {
         kind: "profile" | "background" | "payment-qr"
     ): Promise<{ displayUrl: string; persistUrl: string }> {
         const target = await createSellerAssetUploadUrl(file.name, kind);
-        const putRes = await fetch(target.uploadUrl, {
-            method: "PUT",
-            body: file,
-            headers: { "Content-Type": file.type || "application/octet-stream" }
-        });
+        const putRes = await putToSignedUploadUrl(target.uploadUrl, file);
         if (!putRes.ok) {
             throw new Error("Asset upload failed");
         }

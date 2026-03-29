@@ -1331,7 +1331,8 @@ app.post(
     authorizeRole(["buyer"]),
     async (request, response) => {
         const schema = z.object({
-            filename: z.string().min(3).max(255)
+            filename: z.string().min(3).max(255),
+            kind: z.enum(["profile", "payment-receipt"]).optional().default("profile")
         });
         const parsed = schema.safeParse(request.body);
         if (!parsed.success) {
@@ -1341,7 +1342,7 @@ app.post(
         const target = await generateVerificationUploadTarget(
             request.authUserId as string,
             parsed.data.filename,
-            "profile"
+            parsed.data.kind === "payment-receipt" ? "payment-receipt" : "profile"
         );
         response.status(201).json(target);
     }
@@ -2705,9 +2706,15 @@ app.delete("/cart/items/:itemId", async (request, response) => {
 });
 
 app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, response) => {
+    const onlinePaymentEntry = z.object({
+        sellerId: z.string().min(1),
+        sellerPaymentMethodId: z.string().min(1),
+        receiptProofUrl: z.string().url()
+    });
     const schema = z.object({
         paymentMethod: z.enum(["cash", "online"]),
-        paymentReference: z.string().max(200).optional()
+        paymentReference: z.string().max(500).optional(),
+        onlinePayments: z.array(onlinePaymentEntry).optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -2739,54 +2746,118 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, re
         return;
     }
 
-    const uniqueSellers = new Set(products.map((product) => product.sellerId));
-    if (uniqueSellers.size !== 1) {
-        response.status(400).json({ error: "Checkout currently supports one seller per order" });
-        return;
+    const groups = new Map<string, typeof items>();
+    for (const item of items) {
+        const product = db.products.get(item.productId);
+        if (!product) {
+            continue;
+        }
+        const list = groups.get(product.sellerId) ?? [];
+        list.push(item);
+        groups.set(product.sellerId, list);
     }
-    const sellerId = uniqueSellers.values().next().value;
-    if (!sellerId) {
+    const sellerIds = [...groups.keys()];
+    if (sellerIds.length === 0) {
         response.status(400).json({ error: "Unable to resolve seller for checkout" });
         return;
     }
-    const totalAmount = items.reduce((sum, item) => {
-        const product = products.find((entry) => entry.id === item.productId);
-        return sum + (product?.basePrice ?? 0) * item.quantity;
-    }, 0);
 
-    const id = `o-${Date.now()}`;
-    const order = {
-        id,
-        buyerId,
-        sellerId,
-        status: "created" as const,
-        paymentMethod: parsed.data.paymentMethod,
-        ...(parsed.data.paymentReference ? { paymentReference: parsed.data.paymentReference } : {}),
-        paymentStatus: "pending" as const,
-        receiptStatus:
+    if (parsed.data.paymentMethod === "online") {
+        const ops = parsed.data.onlinePayments ?? [];
+        if (ops.length !== sellerIds.length) {
+            response
+                .status(400)
+                .json({ error: "Provide exactly one online payment entry per seller in your cart" });
+            return;
+        }
+        const seenSeller = new Set<string>();
+        for (const op of ops) {
+            if (!sellerIds.includes(op.sellerId)) {
+                response.status(400).json({ error: "Unknown seller in online payment data" });
+                return;
+            }
+            if (seenSeller.has(op.sellerId)) {
+                response.status(400).json({ error: "Duplicate seller in online payment data" });
+                return;
+            }
+            seenSeller.add(op.sellerId);
+            const method = db.sellerPaymentMethods.get(op.sellerPaymentMethodId);
+            if (!method || method.sellerId !== op.sellerId) {
+                response.status(400).json({ error: "Invalid payment method for seller" });
+                return;
+            }
+        }
+        for (const sid of sellerIds) {
+            if (!seenSeller.has(sid)) {
+                response.status(400).json({ error: "Missing online payment for a seller" });
+                return;
+            }
+        }
+    }
+
+    const baseTime = Date.now();
+    const createdOrders: Array<{ id: string; sellerId: string; totalAmount: number }> = [];
+    let orderIndex = 0;
+
+    for (const sellerId of sellerIds) {
+        const groupItems = groups.get(sellerId);
+        if (!groupItems?.length) {
+            continue;
+        }
+        const totalAmount = groupItems.reduce((sum, item) => {
+            const product = db.products.get(item.productId);
+            return sum + (product?.basePrice ?? 0) * item.quantity;
+        }, 0);
+
+        const op =
             parsed.data.paymentMethod === "online"
-                ? (parsed.data.paymentReference ? ("submitted" as const) : ("none" as const))
-                : ("none" as const),
-        totalAmount,
-        createdAt: new Date().toISOString()
-    };
-    db.orders.set(id, order);
-    persistOrder(order);
-    emitOrderUpdated(order);
+                ? parsed.data.onlinePayments!.find((o) => o.sellerId === sellerId)
+                : undefined;
+        const method = op ? db.sellerPaymentMethods.get(op.sellerPaymentMethodId) : undefined;
+        const paymentReference =
+            parsed.data.paymentMethod === "online" && method
+                ? `${method.methodName} · ${method.accountName}`
+                : parsed.data.paymentReference;
 
-    const orderCreatedAt = order.createdAt;
-    for (const entry of items) {
-        const lineId = `oli-${randomUUID()}`;
-        const lineItem: OrderLineItemRecord = {
-            id: lineId,
-            orderId: id,
-            productId: entry.productId,
-            quantity: entry.quantity,
-            createdAt: orderCreatedAt,
-            selections: entry.selections
+        const id = `o-${baseTime}-${orderIndex}`;
+        orderIndex += 1;
+
+        const order = {
+            id,
+            buyerId,
+            sellerId,
+            status: "created" as const,
+            paymentMethod: parsed.data.paymentMethod,
+            ...(paymentReference ? { paymentReference } : {}),
+            paymentStatus: "pending" as const,
+            receiptStatus:
+                parsed.data.paymentMethod === "online" ? ("submitted" as const) : ("none" as const),
+            totalAmount,
+            createdAt: new Date().toISOString(),
+            ...(op?.receiptProofUrl ? { receiptProofUrl: op.receiptProofUrl } : {}),
+            ...(op?.sellerPaymentMethodId ? { sellerPaymentMethodId: op.sellerPaymentMethodId } : {})
         };
-        db.orderLineItems.set(lineId, lineItem);
-        persistOrderLineItem(lineItem);
+
+        db.orders.set(id, order);
+        persistOrder(order);
+        emitOrderUpdated(order);
+
+        const orderCreatedAt = order.createdAt;
+        for (const entry of groupItems) {
+            const lineId = `oli-${randomUUID()}`;
+            const lineItem: OrderLineItemRecord = {
+                id: lineId,
+                orderId: id,
+                productId: entry.productId,
+                quantity: entry.quantity,
+                createdAt: orderCreatedAt,
+                selections: entry.selections
+            };
+            db.orderLineItems.set(lineId, lineItem);
+            persistOrderLineItem(lineItem);
+        }
+
+        createdOrders.push({ id, sellerId, totalAmount });
     }
 
     for (const entry of items) {
@@ -2798,7 +2869,7 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, re
         }
     }
 
-    response.status(201).json({ id, status: "created", totalAmount });
+    response.status(201).json({ orders: createdOrders });
 });
 
 app.get("/orders", authenticate, (request, response) => {

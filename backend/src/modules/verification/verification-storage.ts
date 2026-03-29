@@ -19,6 +19,7 @@ function isProductMediaKind(
     | "profile"
     | "background"
     | "payment-qr"
+    | "payment-receipt"
     | "product-image"
     | "product-video"
     | "product-3d-model",
@@ -171,6 +172,7 @@ export async function generateVerificationUploadTarget(
     | "profile"
     | "background"
     | "payment-qr"
+    | "payment-receipt"
     | "product-image"
     | "product-video"
     | "product-3d-model" = "verification",
@@ -188,7 +190,14 @@ export async function generateVerificationUploadTarget(
 
   const mockPublicUrl = (base: string): string | undefined => {
     if (isProductMediaKind(kind)) return base;
-    if (kind === "profile" || kind === "background" || kind === "payment-qr") return base;
+    if (
+      kind === "profile" ||
+      kind === "background" ||
+      kind === "payment-qr" ||
+      kind === "payment-receipt"
+    ) {
+      return base;
+    }
     return undefined;
   };
 
@@ -235,7 +244,12 @@ export async function generateVerificationUploadTarget(
   let publicUrl: string | undefined;
   if (isProductMediaKind(kind)) {
     publicUrl = storagePublicObjectUrl(bucket, path);
-  } else if (kind === "profile" || kind === "background" || kind === "payment-qr") {
+  } else if (
+    kind === "profile" ||
+    kind === "background" ||
+    kind === "payment-qr" ||
+    kind === "payment-receipt"
+  ) {
     publicUrl = storagePublicObjectUrl(bucket, path);
   }
 

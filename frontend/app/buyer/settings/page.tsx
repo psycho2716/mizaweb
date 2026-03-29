@@ -15,6 +15,7 @@ import {
     updateBuyerPassword,
     updateBuyerProfile
 } from "@/lib/api/endpoints";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import type { AuthUser } from "@/types";
 import { toast } from "sonner";
@@ -104,11 +105,7 @@ export default function BuyerSettingsPage() {
 
     async function uploadBuyerProfilePhoto(file: File): Promise<string> {
         const target = await createBuyerAssetUploadUrl(file.name);
-        const putRes = await fetch(target.uploadUrl, {
-            method: "PUT",
-            body: file,
-            headers: { "Content-Type": file.type || "application/octet-stream" }
-        });
+        const putRes = await putToSignedUploadUrl(target.uploadUrl, file);
         if (!putRes.ok) {
             throw new Error("Upload failed");
         }

@@ -48,7 +48,10 @@ describe("auth + cart + checkout + orders flow", () => {
       .set("x-guest-session-id", guestSessionId)
       .send({ paymentMethod: "cash" });
     expect(checkoutResponse.status).toBe(201);
-    const orderId = checkoutResponse.body.id as string;
+    const orders = checkoutResponse.body.orders as { id: string }[];
+    expect(Array.isArray(orders)).toBe(true);
+    expect(orders).toHaveLength(1);
+    const orderId = orders[0].id;
 
     const orderListResponse = await request(app)
       .get("/orders")

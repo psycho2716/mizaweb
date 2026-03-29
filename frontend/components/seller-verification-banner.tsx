@@ -13,16 +13,13 @@ import {
     resubmitSellerVerification,
     submitSellerVerification
 } from "@/lib/api/endpoints";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { toSellerVerificationUiPhase, type SellerVerificationUiPhase } from "@/types";
 
 async function uploadPermitFile(file: File) {
     const target = await createVerificationUploadUrl(file.name);
     try {
-        const putRes = await fetch(target.uploadUrl, {
-            method: "PUT",
-            body: file,
-            headers: { "Content-Type": file.type || "application/octet-stream" }
-        });
+        const putRes = await putToSignedUploadUrl(target.uploadUrl, file);
         if (!putRes.ok) {
             console.warn("Permit upload PUT returned non-OK; continuing with signed URL for submit.");
         }

@@ -239,9 +239,17 @@ export function BuyerOrderSuccessClient() {
                                         {meta.fullName} · {meta.email}
                                     </p>
                                     <p className="mt-1">
-                                        {meta.addressLine}, {meta.city} {meta.postalCode},{" "}
-                                        {meta.country}
+                                        {meta.addressLine}, {meta.city} {meta.postalCode}
+                                        {meta.country ? `, ${meta.country}` : ""}
                                     </p>
+                                    {meta.deliveryNotes?.trim() ? (
+                                        <p className="mt-3 whitespace-pre-wrap text-(--muted)">
+                                            <span className="font-semibold text-foreground">
+                                                Notes:{" "}
+                                            </span>
+                                            {meta.deliveryNotes.trim()}
+                                        </p>
+                                    ) : null}
                                 </div>
                             ) : null}
                             <p className="mt-6 text-[10px] uppercase tracking-[0.16em] text-(--muted)">

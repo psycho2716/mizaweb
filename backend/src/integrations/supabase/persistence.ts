@@ -209,6 +209,8 @@ interface OrderRow {
     receipt_request_note: string | null;
     total_amount: number;
     created_at: string;
+    receipt_proof_url?: string | null;
+    seller_payment_method_id?: string | null;
 }
 
 interface OrderMessageRow {
@@ -465,7 +467,11 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                     ? { receiptRequestNote: row.receipt_request_note }
                     : {}),
                 totalAmount: Number(row.total_amount),
-                createdAt: row.created_at
+                createdAt: row.created_at,
+                ...(row.receipt_proof_url ? { receiptProofUrl: row.receipt_proof_url } : {}),
+                ...(row.seller_payment_method_id
+                    ? { sellerPaymentMethodId: row.seller_payment_method_id }
+                    : {})
             });
         }
     }
@@ -921,7 +927,9 @@ export function persistOrder(row: OrderRecord): void {
             receipt_status: row.receiptStatus,
             receipt_request_note: row.receiptRequestNote ?? null,
             total_amount: row.totalAmount,
-            created_at: row.createdAt
+            created_at: row.createdAt,
+            receipt_proof_url: row.receiptProofUrl ?? null,
+            seller_payment_method_id: row.sellerPaymentMethodId ?? null
         },
         { onConflict: "id" }
     );

@@ -102,6 +102,10 @@ export interface OrderRecord {
     receiptRequestNote?: string;
     totalAmount: number;
     createdAt: string;
+    /** Buyer-uploaded payment receipt (online checkout). */
+    receiptProofUrl?: string;
+    /** Seller-configured method the buyer paid with. */
+    sellerPaymentMethodId?: string;
 }
 
 /** Snapshot of cart rows at checkout; used for eligibility (e.g. product reviews). */

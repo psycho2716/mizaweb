@@ -37,6 +37,7 @@ import {
     unpublishProduct,
     updateProduct
 } from "@/lib/api/endpoints";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import {
     COLORS_OPTION_NAME,
     DIMENSIONS_OPTION_NAME,
@@ -215,11 +216,7 @@ function persistedMediaUrl(target: VerificationUploadTarget): string {
 
 async function uploadProductModel3dBlob(productId: string, blob: Blob): Promise<string> {
     const target = await createProductModel3dUploadUrl(productId, "model.glb");
-    const putRes = await fetch(target.uploadUrl, {
-        method: "PUT",
-        body: blob,
-        headers: { "Content-Type": "application/octet-stream" }
-    });
+    const putRes = await putToSignedUploadUrl(target.uploadUrl, blob);
     if (!putRes.ok) {
         throw new Error("3D model upload failed");
     }
@@ -241,11 +238,7 @@ async function uploadProductImageFile(productId: string, file: File): Promise<vo
 
 async function uploadProductVideoFile(productId: string, file: File): Promise<string> {
     const target = await createProductMediaUploadUrl(productId, file.name, "video");
-    const putRes = await fetch(target.uploadUrl, {
-        method: "PUT",
-        body: file,
-        headers: { "Content-Type": file.type || "application/octet-stream" }
-    });
+    const putRes = await putToSignedUploadUrl(target.uploadUrl, file);
     if (!putRes.ok) {
         throw new Error("Video upload failed");
     }

@@ -19,6 +19,7 @@ import {
     submitSellerVerification
 } from "@/lib/api/endpoints";
 import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
+import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { buyerRegisterSchema, sellerRegisterSchema } from "@/types";
 
 const SellerShopMapPicker = dynamic(() => import("@/components/auth/seller-shop-map-picker"), {
@@ -142,11 +143,7 @@ function RegisterPageContent() {
             window.dispatchEvent(new Event("miza-auth-change"));
 
             const target = await createVerificationUploadUrl(permitFile.name);
-            const putRes = await fetch(target.uploadUrl, {
-                method: "PUT",
-                body: permitFile,
-                headers: { "Content-Type": permitFile.type || "application/octet-stream" }
-            });
+            const putRes = await putToSignedUploadUrl(target.uploadUrl, permitFile);
             if (!putRes.ok) {
                 console.warn(
                     "Permit upload PUT returned non-OK; continuing with signed URL for submit."

@@ -24,6 +24,33 @@ interface StoredUser {
     id: string;
 }
 
+function readMizaTokenFromCookie(): string | null {
+    if (typeof document === "undefined") {
+        return null;
+    }
+    const match = document.cookie.match(/(?:^|; )miza_token=([^;]*)/);
+    if (!match?.[1]) {
+        return null;
+    }
+    try {
+        return decodeURIComponent(match[1].trim());
+    } catch {
+        return match[1].trim();
+    }
+}
+
+function resolveBrowserAuthToken(): string | null {
+    const ls = window.localStorage.getItem("miza_token");
+    if (ls && ls.length >= 10) {
+        return ls;
+    }
+    const fromCookie = readMizaTokenFromCookie();
+    if (fromCookie && fromCookie.length >= 10) {
+        return fromCookie;
+    }
+    return null;
+}
+
 export async function apiFetch<T>(path: string, options?: RequestOptions): Promise<T> {
     const headers = new Headers(options?.headers);
     headers.set("Content-Type", "application/json");
@@ -36,7 +63,7 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
                 headers.set("x-guest-session-id", guestSessionId);
             }
         }
-        const token = window.localStorage.getItem("miza_token");
+        const token = resolveBrowserAuthToken();
         if (token) {
             headers.set("authorization", `Bearer ${token}`);
         } else {
