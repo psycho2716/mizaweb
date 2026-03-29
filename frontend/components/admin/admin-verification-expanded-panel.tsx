@@ -1,5 +1,6 @@
 "use client";
 
+import { AdminSellerLocationMap } from "@/components/admin/admin-seller-location-map";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,6 +57,14 @@ export function AdminVerificationExpandedPanel({
             <span className="font-semibold text-foreground">Address: </span>
             {entry.profile?.address ?? "—"}
           </p>
+          {entry.profile ? (
+            <AdminSellerLocationMap
+              latitude={entry.profile.shopLatitude}
+              longitude={entry.profile.shopLongitude}
+              address={entry.profile.address}
+              className="mt-3 border-t border-(--border) pt-3"
+            />
+          ) : null}
           {entry.profile?.profileImageUrl ? (
             <p>
               <span className="font-semibold text-foreground">Profile image: </span>

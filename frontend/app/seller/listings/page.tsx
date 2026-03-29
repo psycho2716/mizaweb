@@ -1240,7 +1240,7 @@ export default function SellerListingsPage() {
                         Stone Products
                     </h1>
                     <p className="mt-1 text-sm text-(--muted)">
-                        Create slabs, publish listings, and edit specimens.
+                        Manage your stone inventory, publish new listings, and update product details.
                     </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
