@@ -45,3 +45,13 @@ export function listingYoutubeEmbedUrl(url: string): string | null {
     }
     return null;
 }
+
+/** Embed URL with autoplay (muted) so in-hero playback works under browser policies. */
+export function listingYoutubeEmbedUrlAutoplay(url: string): string | null {
+    const base = listingYoutubeEmbedUrl(url);
+    if (!base) {
+        return null;
+    }
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}autoplay=1&mute=1&rel=0`;
+}

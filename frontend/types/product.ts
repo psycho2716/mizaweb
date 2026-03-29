@@ -123,6 +123,8 @@ export interface SellerPublicProfile {
   paymentMethods: SellerPaymentMethod[];
   /** Set when the seller is waiting for admin to approve a new map pin. */
   pendingLocationRequest?: SellerLocationChangeRequest | null;
+  /** Published listings for public storefront grid (from GET /sellers/:id/profile). */
+  storefrontProducts?: Product[];
 }
 
 export interface SellerPaymentMethod {

@@ -1,11 +1,12 @@
 /* eslint-disable @next/next/no-assign-module-variable */
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { checkoutCart, getOrderMessages, getOrders, sendOrderMessage } from "@/lib/api/endpoints";
+import { getOrderMessages, getOrders, sendOrderMessage } from "@/lib/api/endpoints";
 import { formatPeso } from "@/lib/utils";
 import type { Order, OrderMessage } from "@/types";
 
@@ -16,9 +17,6 @@ const fieldClass =
 
 export default function BuyerOrdersPage() {
     const [orders, setOrders] = useState<Order[]>([]);
-    const [paymentMethod, setPaymentMethod] = useState<"cash" | "online">("cash");
-    const [paymentReference, setPaymentReference] = useState("");
-    const [loading, setLoading] = useState(false);
     const [activeOrderId, setActiveOrderId] = useState("");
     const [messages, setMessages] = useState<OrderMessage[]>([]);
     const [messageInput, setMessageInput] = useState("");
@@ -36,19 +34,6 @@ export default function BuyerOrdersPage() {
             setOrders(response.data);
         } catch {
             setOrders([]);
-        }
-    }
-
-    async function handleCheckout() {
-        setLoading(true);
-        try {
-            await checkoutCart({
-                paymentMethod,
-                ...(paymentMethod === "online" && paymentReference ? { paymentReference } : {})
-            });
-            await refreshOrders();
-        } finally {
-            setLoading(false);
         }
     }
 
@@ -120,48 +105,20 @@ export default function BuyerOrdersPage() {
                     Your purchases
                 </h1>
                 <p className="mt-2 text-sm text-(--muted)">
-                    Complete checkout from your cart, then track orders and message the seller.
+                    Place new orders from your{" "}
+                    <Link href="/cart" className="font-semibold text-(--accent) underline-offset-4 hover:underline">
+                        cart
+                    </Link>{" "}
+                    or{" "}
+                    <Link
+                        href="/buyer/checkout"
+                        className="font-semibold text-(--accent) underline-offset-4 hover:underline"
+                    >
+                        checkout
+                    </Link>
+                    . Track shipments and chat with the seller below.
                 </p>
             </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>Checkout</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    <label className="block text-sm">
-                        <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
-                            Payment method
-                        </span>
-                        <select
-                            className={fieldClass}
-                            value={paymentMethod}
-                            onChange={(event) =>
-                                setPaymentMethod(event.target.value as "cash" | "online")
-                            }
-                        >
-                            <option value="cash">Cash</option>
-                            <option value="online">Online payment (seller QR)</option>
-                        </select>
-                    </label>
-                    {paymentMethod === "online" ? (
-                        <label className="block text-sm">
-                            <span className="mb-1 block text-xs font-semibold uppercase tracking-wider text-(--muted)">
-                                Payment reference
-                            </span>
-                            <input
-                                className={fieldClass}
-                                value={paymentReference}
-                                onChange={(event) => setPaymentReference(event.target.value)}
-                                placeholder="Transaction or reference number"
-                            />
-                        </label>
-                    ) : null}
-                    <Button onClick={() => void handleCheckout()} disabled={loading}>
-                        {loading ? "Processing..." : "Checkout cart"}
-                    </Button>
-                </CardContent>
-            </Card>
 
             <Card>
                 <CardHeader>

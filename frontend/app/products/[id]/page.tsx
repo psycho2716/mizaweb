@@ -36,5 +36,5 @@ export default async function ProductDetailPage({
     );
   }
 
-  return <ProductDetailClient product={product} />;
+  return <ProductDetailClient key={product.id} product={product} />;
 }

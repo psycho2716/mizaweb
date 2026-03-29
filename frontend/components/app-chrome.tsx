@@ -8,13 +8,14 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const isAuthRoute = pathname.startsWith("/auth");
     const isAdminRoute = pathname.startsWith("/admin");
-    const isSellerRoute = pathname.startsWith("/seller");
+    /** Seller dashboard/console (`/seller/...`), not public shop pages (`/sellers/...`). */
+    const isSellerConsoleRoute = pathname === "/seller" || pathname.startsWith("/seller/");
 
     if (isAuthRoute || isAdminRoute) {
         return <>{children}</>;
     }
 
-    if (isSellerRoute) {
+    if (isSellerConsoleRoute) {
         return <div className="mizaweb-stitch-app">{children}</div>;
     }
 

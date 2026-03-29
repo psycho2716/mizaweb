@@ -1,4 +1,5 @@
 import { apiFetch } from "@/lib/api/client";
+import { dispatchCartChanged } from "@/lib/cart-events";
 import type {
     AdminLocationRequestItem,
     AdminOverviewData,
@@ -6,6 +7,8 @@ import type {
     AuthLoginResponse,
     AuthMeResponse,
     BuyerProfileUpdateResponse,
+    CartItemResponse,
+    CartItemSelection,
     CartResponse,
     CheckoutResponse,
     ConversationCreateResponse,
@@ -14,9 +17,11 @@ import type {
     DirectMessagesResponse,
     LandingHighlightsResponse,
     OrdersResponse,
+    OrderDetailResponse,
     OrderMessagesResponse,
     PostProductReviewResponse,
     ProductDetailResponse,
+    ProductReviewEligibilityResponse,
     ProductCreateResponse,
     ProductReviewsResponse,
     ProductsResponse,
@@ -231,6 +236,10 @@ export function postProductReview(productId: string, rating: number, body: strin
     });
 }
 
+export function getProductReviewEligibility(productId: string) {
+    return apiFetch<ProductReviewEligibilityResponse>(`/products/${productId}/review-eligibility`);
+}
+
 export function listConversations() {
     return apiFetch<ConversationsListResponse>("/conversations");
 }
@@ -351,12 +360,19 @@ export function getCart() {
     return apiFetch<CartResponse>("/cart", { includeGuestSession: true });
 }
 
-export function addCartItem(productId: string, quantity: number) {
+export function addCartItem(
+    productId: string,
+    quantity: number,
+    selections: CartItemSelection[] = []
+) {
     ensureGuestSessionId();
     return apiFetch<{ id: string }>("/cart/items", {
         method: "POST",
         includeGuestSession: true,
-        body: JSON.stringify({ productId, quantity })
+        body: JSON.stringify({ productId, quantity, selections })
+    }).then((r) => {
+        dispatchCartChanged();
+        return r;
     });
 }
 
@@ -369,7 +385,50 @@ export function checkoutCart(payload: {
         method: "POST",
         includeGuestSession: true,
         body: JSON.stringify(payload)
+    }).then((r) => {
+        dispatchCartChanged();
+        return r;
     });
+}
+
+function deleteCartItemRequest(itemId: string) {
+    ensureGuestSessionId();
+    return apiFetch<{ ok: boolean }>(`/cart/items/${encodeURIComponent(itemId)}`, {
+        method: "DELETE",
+        includeGuestSession: true
+    });
+}
+
+export function removeCartItem(itemId: string) {
+    return deleteCartItemRequest(itemId).then((r) => {
+        dispatchCartChanged();
+        return r;
+    });
+}
+
+export function updateCartItemQuantity(itemId: string, quantity: number) {
+    ensureGuestSessionId();
+    return apiFetch<{ ok: boolean; data: CartItemResponse }>(
+        `/cart/items/${encodeURIComponent(itemId)}`,
+        {
+            method: "PATCH",
+            includeGuestSession: true,
+            body: JSON.stringify({ quantity })
+        }
+    ).then((r) => {
+        dispatchCartChanged();
+        return r;
+    });
+}
+
+export async function clearCartItems(): Promise<void> {
+    const { data } = await getCart();
+    await Promise.all(data.map((item) => deleteCartItemRequest(item.id)));
+    dispatchCartChanged();
+}
+
+export function getOrderById(orderId: string) {
+    return apiFetch<OrderDetailResponse>(`/orders/${encodeURIComponent(orderId)}`);
 }
 
 export function getOrders() {

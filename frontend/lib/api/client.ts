@@ -4,12 +4,14 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:400
 export class ApiRequestError extends Error {
     readonly status: number;
     readonly code?: string;
+    readonly cooldownEndsAt?: string;
 
-    constructor(message: string, status: number, code?: string) {
+    constructor(message: string, status: number, code?: string, cooldownEndsAt?: string) {
         super(message);
         this.name = "ApiRequestError";
         this.status = status;
         this.code = code;
+        this.cooldownEndsAt = cooldownEndsAt;
     }
 }
 
@@ -68,8 +70,9 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
     if (!response.ok) {
         let message = "Request failed";
         let code: string | undefined;
+        let cooldownEndsAt: string | undefined;
         if (payload && typeof payload === "object") {
-            const body = payload as { error?: unknown; code?: unknown };
+            const body = payload as { error?: unknown; code?: unknown; cooldownEndsAt?: unknown };
             if (typeof body.error === "string") {
                 message = body.error;
             } else if (body.error !== undefined) {
@@ -78,8 +81,11 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
             if (typeof body.code === "string") {
                 code = body.code;
             }
+            if (typeof body.cooldownEndsAt === "string") {
+                cooldownEndsAt = body.cooldownEndsAt;
+            }
         }
-        throw new ApiRequestError(message, response.status, code);
+        throw new ApiRequestError(message, response.status, code, cooldownEndsAt);
     }
 
     return payload as T;

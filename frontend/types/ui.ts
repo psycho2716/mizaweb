@@ -1,6 +1,11 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 import type { AuthUser } from "./auth";
-import type { SellerPublicProfile } from "./product";
+import type { Product, SellerPublicProfile } from "./product";
+
+/** Public shop catalog: Lithos-style grid, filters, sort, pagination. */
+export interface ProductsListingClientProps {
+  initialProducts: Product[];
+}
 
 export interface AdminConsoleShellProps {
   children: ReactNode;
@@ -90,6 +95,17 @@ export interface SellerShopMapPickerProps {
   longitude: number | undefined;
   onPositionChange: (lat: number, lng: number) => void;
   error?: string;
+}
+
+/** Product detail hero: gallery, 3D model, or listing video. */
+export type ProductHeroMediaMode = "image" | "3d" | "video";
+
+/** Lithos-style pill: one segment per available mode (order: image, 3d, video). */
+export interface ProductViewModeToggleProps {
+  modes: ProductHeroMediaMode[];
+  active: ProductHeroMediaMode;
+  onSelect: (mode: ProductHeroMediaMode) => void;
+  className?: string;
 }
 
 /** Read-only map for admin views of a seller’s pinned shop. */

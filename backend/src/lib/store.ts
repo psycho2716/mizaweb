@@ -5,6 +5,7 @@ import type {
   ConversationRecord,
   CustomizationOption,
   CustomizationRule,
+  OrderLineItemRecord,
   OrderMessage,
   OrderRecord,
   ProductMedia,
@@ -28,6 +29,7 @@ const sellerLocationRequests = new Map<string, SellerLocationChangeRequest>();
 const products = new Map<string, ProductRecord>();
 const cartItems = new Map<string, CartItem>();
 const orders = new Map<string, OrderRecord>();
+const orderLineItems = new Map<string, OrderLineItemRecord>();
 const orderMessages = new Map<string, OrderMessage>();
 const productReviews = new Map<string, ProductReviewRecord>();
 const conversations = new Map<string, ConversationRecord>();
@@ -78,6 +80,7 @@ export const db = {
   products,
   cartItems,
   orders,
+  orderLineItems,
   orderMessages,
   productReviews,
   conversations,

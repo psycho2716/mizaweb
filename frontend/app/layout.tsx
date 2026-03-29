@@ -17,7 +17,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
     title: getAppName(),
-    description: "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts priced in ₱."
+    description:
+        "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts priced in ₱."
 };
 
 export default function RootLayout({
@@ -29,6 +30,7 @@ export default function RootLayout({
         <html
             lang="en"
             className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+            suppressHydrationWarning
         >
             <body className="min-h-full text-foreground antialiased" suppressHydrationWarning>
                 <AppChrome>{children}</AppChrome>

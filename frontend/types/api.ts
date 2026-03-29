@@ -4,7 +4,7 @@ export interface ApiError {
 
 import type { AuthUser } from "./auth";
 import type { ConversationThread, DirectMessage } from "./messaging";
-import type { Order, OrderMessage } from "./order";
+import type { CartItemSelection, Order, OrderLineItem, OrderMessage } from "./order";
 import type { Product } from "./product";
 import type { ProductReview } from "./review";
 import type { AdminUserListItem, AdminVerificationItem } from "./admin";
@@ -58,6 +58,16 @@ export interface PostProductReviewResponse {
   data: ProductReview;
 }
 
+export interface ProductReviewEligibility {
+  hasCompletedPurchase: boolean;
+  eligible: boolean;
+  cooldownEndsAt: string | null;
+}
+
+export interface ProductReviewEligibilityResponse {
+  data: ProductReviewEligibility;
+}
+
 export interface ConversationsListResponse {
   data: ConversationThread[];
 }
@@ -88,6 +98,7 @@ export interface CartItemResponse {
   quantity: number;
   buyerId?: string;
   guestSessionId?: string;
+  selections?: CartItemSelection[];
 }
 
 export interface CartResponse {
@@ -98,6 +109,13 @@ export interface CheckoutResponse {
   id: string;
   status: "created";
   totalAmount: number;
+}
+
+export interface OrderDetailResponse {
+  data: {
+    order: Order;
+    lineItems: OrderLineItem[];
+  };
 }
 
 export interface OrdersResponse {

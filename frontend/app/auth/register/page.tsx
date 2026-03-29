@@ -3,10 +3,10 @@
 import { Store } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useWatch } from "react-hook-form";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
     registerAccount,
     submitSellerVerification
 } from "@/lib/api/endpoints";
+import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
 import { buyerRegisterSchema, sellerRegisterSchema } from "@/types";
 
 const SellerShopMapPicker = dynamic(() => import("@/components/auth/seller-shop-map-picker"), {
@@ -32,9 +33,16 @@ const SellerShopMapPicker = dynamic(() => import("@/components/auth/seller-shop-
 type BuyerRegisterFormValues = z.infer<typeof buyerRegisterSchema>;
 type SellerRegisterFormValues = z.infer<typeof sellerRegisterSchema>;
 
-export default function RegisterPage() {
+function RegisterPageContent() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [permitFile, setPermitFile] = useState<File | null>(null);
+    const loginHref = (() => {
+        const raw = parseSafeCallbackUrl(searchParams.get("callbackUrl"));
+        return raw != null
+            ? `/auth/login?callbackUrl=${encodeURIComponent(raw)}`
+            : "/auth/login";
+    })();
 
     const {
         register: registerBuyer,
@@ -73,22 +81,9 @@ export default function RegisterPage() {
     const shopLat = useWatch({ control: sellerControl, name: "shopLatitude" });
     const shopLng = useWatch({ control: sellerControl, name: "shopLongitude" });
 
-    async function completeRegistration(
-        values: BuyerRegisterFormValues | SellerRegisterFormValues
-    ) {
+    async function completeRegistration(values: BuyerRegisterFormValues) {
         try {
-            const result = await registerAccount(values.email, values.password, values.role, {
-                ...(values.role === "seller"
-                    ? {
-                          fullName: values.fullName,
-                          businessName: values.businessName,
-                          contactNumber: values.contactNumber,
-                          address: values.address,
-                          shopLatitude: values.shopLatitude,
-                          shopLongitude: values.shopLongitude
-                      }
-                    : {})
-            });
+            const result = await registerAccount(values.email, values.password, values.role, {});
             localStorage.setItem("miza_token", result.token);
             localStorage.setItem("miza_user", JSON.stringify(result.user));
             await fetch("/api/auth/session", {
@@ -98,11 +93,12 @@ export default function RegisterPage() {
             });
             window.dispatchEvent(new Event("miza-auth-change"));
 
-            if (values.role === "seller") {
-                router.push("/seller/dashboard");
-            } else {
-                router.push("/products");
-            }
+            const pending = parseSafeCallbackUrl(searchParams.get("callbackUrl"));
+            const dest =
+                pending && isCallbackAllowedForRole(pending, "buyer")
+                    ? pending
+                    : "/products";
+            router.push(dest);
             toast.success("Account created successfully");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Registration failed");
@@ -465,7 +461,7 @@ export default function RegisterPage() {
 
                         <p className="mt-7 mx-auto text-xs uppercase tracking-[0.12em] text-(--muted)">
                             Already have an account?{" "}
-                            <Link href="/auth/login" className="font-semibold text-(--accent)">
+                            <Link href={loginHref} className="font-semibold text-(--accent)">
                                 Login
                             </Link>
                         </p>
@@ -474,5 +470,19 @@ export default function RegisterPage() {
             </div>
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_84%_16%,rgba(34,199,243,0.09),transparent_36%)]" />
         </main>
+    );
+}
+
+export default function RegisterPage() {
+    return (
+        <Suspense
+            fallback={
+                <main className="flex min-h-screen items-center justify-center bg-[#070b11] text-sm text-(--muted)">
+                    Loading…
+                </main>
+            }
+        >
+            <RegisterPageContent />
+        </Suspense>
     );
 }

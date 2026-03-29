@@ -10,6 +10,13 @@ import { z } from "zod";
 import { env } from "./config/env";
 import { authorizeRole } from "./middleware/authorize-role";
 import { authenticate, resolveOptionalAuthUserId } from "./middleware/authenticate";
+import { parseAndValidateCartSelections } from "./lib/cart-selections";
+import {
+    cartSelectionsEqual,
+    maxPurchasableUnits,
+    ownerCartItems,
+    totalQuantityForProduct
+} from "./lib/cart-line-merge";
 import { db } from "./lib/store";
 import {
     createSupabaseAdminClient,
@@ -19,6 +26,7 @@ import {
 } from "./integrations/supabase/client";
 import {
     deleteCartItem,
+    deleteOrderLineItem,
     deleteCustomizationOptionsByProduct,
     deleteCustomizationRulesByProduct,
     deleteProduct,
@@ -35,6 +43,7 @@ import {
     persistConversation,
     persistConversationMessage,
     persistOrder,
+    persistOrderLineItem,
     persistOrderMessage,
     persistProduct,
     persistProductMedia,
@@ -57,6 +66,7 @@ import {
     PRODUCT_DIMENSIONS_OPTION_NAME,
     syncProductDimensionAndColorOptions
 } from "./lib/product-customization";
+import { getReviewEligibilityForBuyer } from "./lib/review-eligibility";
 import { emitDirectMessage, emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
 import {
     createSignedVerificationDownloadUrl,
@@ -70,6 +80,7 @@ import {
 import type {
     AuthUser,
     ConversationRecord,
+    OrderLineItemRecord,
     ProductRecord,
     SellerLocationChangeRequest,
     SellerPaymentMethod,
@@ -190,15 +201,25 @@ function findDirectConversation(buyerId: string, sellerId: string): Conversation
 }
 
 /** In-memory buyer-owned data (Supabase CASCADE handles persisted rows when auth user is deleted). */
-function clearBuyerAssociatedRuntimeData(buyerId: string): void {
+async function clearBuyerAssociatedRuntimeData(buyerId: string): Promise<void> {
     for (const item of [...db.cartItems.values()]) {
         if (item.buyerId === buyerId) {
             db.cartItems.delete(item.id);
-            deleteCartItem(item.id);
+            try {
+                await deleteCartItem(item.id);
+            } catch (error) {
+                console.error("[clearBuyerAssociatedRuntimeData] cart item", error);
+            }
         }
     }
     for (const order of [...db.orders.values()]) {
         if (order.buyerId === buyerId) {
+            for (const line of [...db.orderLineItems.values()]) {
+                if (line.orderId === order.id) {
+                    db.orderLineItems.delete(line.id);
+                    deleteOrderLineItem(line.id);
+                }
+            }
             for (const m of [...db.orderMessages.values()]) {
                 if (m.orderId === order.id) {
                     db.orderMessages.delete(m.id);
@@ -224,7 +245,7 @@ function clearBuyerAssociatedRuntimeData(buyerId: string): void {
     }
 }
 
-function cleanupBuyerRuntimeStateAfterAuthDeletion(buyerId: string): void {
+async function cleanupBuyerRuntimeStateAfterAuthDeletion(buyerId: string): Promise<void> {
     if (!isSupabaseAuthReady()) {
         for (const [email, cred] of [...db.credentials.entries()]) {
             if (cred.userId === buyerId) {
@@ -232,7 +253,7 @@ function cleanupBuyerRuntimeStateAfterAuthDeletion(buyerId: string): void {
             }
         }
     }
-    clearBuyerAssociatedRuntimeData(buyerId);
+    await clearBuyerAssociatedRuntimeData(buyerId);
     db.users.delete(buyerId);
 }
 
@@ -293,7 +314,7 @@ async function adminDeleteUserAccount(
         deleteSellerStatusBySellerId(targetId);
     }
     if (target.role === "buyer") {
-        clearBuyerAssociatedRuntimeData(targetId);
+        await clearBuyerAssociatedRuntimeData(targetId);
     }
     db.users.delete(targetId);
     return { ok: true };
@@ -324,6 +345,27 @@ const searchLimiter = rateLimit({ windowMs: 60 * 1000, max: 120 });
 function getGuestSessionId(request: express.Request): string | null {
     const sessionId = request.header("x-guest-session-id");
     return sessionId && sessionId.trim().length > 0 ? sessionId.trim() : null;
+}
+
+/** Moves guest-session lines onto the buyer so logged-in shoppers see pre-login cart items. */
+async function mergeGuestCartIntoBuyer(
+    buyerId: string,
+    guestSessionId: string | null
+): Promise<void> {
+    if (!guestSessionId) {
+        return;
+    }
+    const guestItems = [...db.cartItems.values()].filter(
+        (entry) => entry.guestSessionId === guestSessionId
+    );
+    for (const item of guestItems) {
+        item.buyerId = buyerId;
+        delete item.guestSessionId;
+        if (!Array.isArray(item.selections)) {
+            item.selections = [];
+        }
+        await persistCartItem(item);
+    }
 }
 
 function parseListPagination(query: express.Request["query"]): { page: number; limit: number } {
@@ -678,6 +720,18 @@ app.get("/sellers/:id/profile", async (request, response) => {
     const reviewAgg = sellerReviewAggregate(id);
     const resolvedProfile = await withResolvedSellerProfileMedia(profile);
     const resolvedPayments = await withResolvedPaymentQrImages(paymentMethods);
+    const storefrontProducts = [...db.products.values()]
+        .filter((product) => product.sellerId === id && product.isPublished)
+        .map((p) => ({
+            ...p,
+            thumbnailUrl: firstProductThumbnailUrl(p.id)
+        }))
+        .sort((a, b) => {
+            if (Boolean(a.isFeatured) !== Boolean(b.isFeatured)) {
+                return a.isFeatured ? -1 : 1;
+            }
+            return a.title.localeCompare(b.title);
+        });
     response.json({
         data: {
             id: seller.id,
@@ -685,11 +739,10 @@ app.get("/sellers/:id/profile", async (request, response) => {
             ...resolvedProfile,
             paymentMethods: resolvedPayments,
             verificationStatus: db.sellerStatus.get(id) ?? "unsubmitted",
-            publishedProducts: [...db.products.values()].filter(
-                (product) => product.sellerId === id && product.isPublished
-            ).length,
+            publishedProducts: storefrontProducts.length,
             averageRating: reviewAgg.averageRating,
-            reviewCount: reviewAgg.reviewCount
+            reviewCount: reviewAgg.reviewCount,
+            storefrontProducts
         }
     });
 });
@@ -1195,7 +1248,7 @@ app.delete(
             response.status(500).json({ error: deleteErr.message });
             return;
         }
-        cleanupBuyerRuntimeStateAfterAuthDeletion(user.id);
+        await cleanupBuyerRuntimeStateAfterAuthDeletion(user.id);
         response.json({ ok: true });
     }
 );
@@ -1986,8 +2039,18 @@ app.post(
     }
 );
 
-app.get("/products", searchLimiter, (_request, response) => {
-    const data = [...db.products.values()].filter((row) => row.isPublished);
+app.get("/products", searchLimiter, (request, response) => {
+    const rawSeller = request.query.seller;
+    const sellerFilter =
+        typeof rawSeller === "string" && rawSeller.length > 0 ? rawSeller : undefined;
+    let rows = [...db.products.values()].filter((row) => row.isPublished);
+    if (sellerFilter) {
+        rows = rows.filter((p) => p.sellerId === sellerFilter);
+    }
+    const data = rows.map((p) => ({
+        ...p,
+        thumbnailUrl: firstProductThumbnailUrl(p.id)
+    }));
     response.json({ data });
 });
 
@@ -2028,6 +2091,26 @@ app.get("/products/:id/reviews", (request, response) => {
     response.json({ data: rows });
 });
 
+app.get(
+    "/products/:id/review-eligibility",
+    authenticate,
+    authorizeRole(["buyer"]),
+    (request, response) => {
+        const productId = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(productId);
+        if (!product || !product.isPublished) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        const buyerId = request.authUserId as string;
+        const { hasCompletedPurchase, eligible, cooldownEndsAt } = getReviewEligibilityForBuyer(
+            buyerId,
+            productId
+        );
+        response.json({ data: { hasCompletedPurchase, eligible, cooldownEndsAt } });
+    }
+);
+
 app.post("/products/:id/reviews", authenticate, authorizeRole(["buyer"]), async (request, response) => {
     const productId = z.string().min(1).parse(request.params.id);
     const product = db.products.get(productId);
@@ -2045,6 +2128,23 @@ app.post("/products/:id/reviews", authenticate, authorizeRole(["buyer"]), async 
         return;
     }
     const buyerId = request.authUserId as string;
+    const { hasCompletedPurchase, eligible, cooldownEndsAt } = getReviewEligibilityForBuyer(
+        buyerId,
+        productId
+    );
+    if (!hasCompletedPurchase) {
+        response.status(403).json({
+            error: "Reviews are available only after this product is delivered from a completed order."
+        });
+        return;
+    }
+    if (!eligible) {
+        response.status(429).json({
+            error: "You can post or update a review for this product once every 30 days.",
+            ...(cooldownEndsAt ? { cooldownEndsAt } : {})
+        });
+        return;
+    }
     const existing = [...db.productReviews.values()].find(
         (r) => r.productId === productId && r.buyerId === buyerId
     );
@@ -2387,7 +2487,14 @@ app.get("/cart", async (request, response) => {
     if (authUserId) {
         const user = db.users.get(authUserId);
         if (!user || user.role !== "buyer") {
-            response.status(403).json({ error: "Forbidden" });
+            response.json({ data: [] });
+            return;
+        }
+        try {
+            await mergeGuestCartIntoBuyer(authUserId, guestSessionId);
+        } catch (error) {
+            console.error("[GET /cart] merge guest cart", error);
+            response.status(500).json({ error: "Could not load cart" });
             return;
         }
         const items = [...db.cartItems.values()].filter((entry) => entry.buyerId === authUserId);
@@ -2409,40 +2516,115 @@ app.get("/cart", async (request, response) => {
 app.post("/cart/items", async (request, response) => {
     const schema = z.object({
         productId: z.string().min(1),
-        quantity: z.number().int().positive()
+        quantity: z.number().int().positive(),
+        selections: z
+            .array(z.object({ optionId: z.string().min(1), value: z.string().min(1) }))
+            .optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
         return;
     }
-    const id = `ci-${Date.now()}`;
+    const product = db.products.get(parsed.data.productId);
+    if (!product) {
+        response.status(404).json({ error: "Product not found" });
+        return;
+    }
+    const selectionResult = parseAndValidateCartSelections(
+        parsed.data.productId,
+        parsed.data.selections
+    );
+    if (!selectionResult.ok) {
+        response.status(400).json({ error: selectionResult.error });
+        return;
+    }
     const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
 
-    if (!authUserId && !guestSessionId) {
-        response
-            .status(400)
-            .json({ error: "Guest session id is required for guest cart operations" });
-        return;
+    let createdId: string | null = null;
+    try {
+        if (authUserId) {
+            const user = db.users.get(authUserId);
+            if (!user || user.role !== "buyer") {
+                response.status(403).json({ error: "Only shoppers can add items to the cart" });
+                return;
+            }
+            await mergeGuestCartIntoBuyer(authUserId, guestSessionId);
+        } else if (!guestSessionId) {
+            response
+                .status(400)
+                .json({ error: "Guest session id is required for guest cart operations" });
+            return;
+        }
+
+        const ownerLines = ownerCartItems(db.cartItems.values(), authUserId, guestSessionId);
+        const pid = parsed.data.productId;
+        const addQty = parsed.data.quantity;
+        const maxUnits = maxPurchasableUnits(product);
+        const totalForProduct = totalQuantityForProduct(ownerLines, pid);
+        if (maxUnits !== null && totalForProduct + addQty > maxUnits) {
+            response.status(400).json({
+                error: `Only ${maxUnits} unit(s) available for this listing. You already have ${totalForProduct} in your cart.`
+            });
+            return;
+        }
+
+        const existing = ownerLines.find(
+            (line) =>
+                line.productId === pid &&
+                cartSelectionsEqual(
+                    Array.isArray(line.selections) ? line.selections : [],
+                    selectionResult.selections
+                )
+        );
+
+        if (existing) {
+            if (!Array.isArray(existing.selections)) {
+                existing.selections = [];
+            }
+            existing.quantity += addQty;
+            await persistCartItem(existing);
+            response.status(200).json({ id: existing.id });
+            return;
+        }
+
+        createdId = `ci-${Date.now()}`;
+        const cartItem = {
+            id: createdId,
+            ...(authUserId ? { buyerId: authUserId } : {}),
+            ...(!authUserId && guestSessionId ? { guestSessionId } : {}),
+            productId: pid,
+            quantity: addQty,
+            selections: selectionResult.selections
+        };
+        db.cartItems.set(createdId, cartItem);
+        await persistCartItem(cartItem);
+        response.status(201).json({ id: createdId });
+    } catch (error) {
+        if (createdId) {
+            db.cartItems.delete(createdId);
+        }
+        console.error("[POST /cart/items]", error);
+        response.status(500).json({ error: "Could not save cart item. Try again." });
     }
-    const cartItem = {
-        id,
-        ...(authUserId ? { buyerId: authUserId } : {}),
-        ...(!authUserId && guestSessionId ? { guestSessionId } : {}),
-        productId: parsed.data.productId,
-        quantity: parsed.data.quantity
-    };
-    db.cartItems.set(id, cartItem);
-    persistCartItem(cartItem);
-    response.status(201).json({ id });
 });
 
 app.patch("/cart/items/:itemId", async (request, response) => {
     const itemId = z.string().min(1).parse(request.params.itemId);
-    const cartItem = db.cartItems.get(itemId);
     const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
+    const authedBuyer = authUserId ? db.users.get(authUserId) : undefined;
+    if (authUserId && authedBuyer?.role === "buyer") {
+        try {
+            await mergeGuestCartIntoBuyer(authUserId, guestSessionId);
+        } catch (error) {
+            console.error("[PATCH /cart/items] merge", error);
+            response.status(500).json({ error: "Could not update cart" });
+            return;
+        }
+    }
+    const cartItem = db.cartItems.get(itemId);
     const isOwner = authUserId
         ? cartItem?.buyerId === authUserId
         : cartItem?.guestSessionId === guestSessionId;
@@ -2450,22 +2632,59 @@ app.patch("/cart/items/:itemId", async (request, response) => {
         response.status(404).json({ error: "Not found" });
         return;
     }
-    const schema = z.object({ quantity: z.number().int().positive() });
+    const schema = z.object({ quantity: z.coerce.number().int().positive() });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
         response.status(400).json({ error: parsed.error.flatten() });
         return;
     }
+    const productForLine = db.products.get(cartItem.productId);
+    if (!productForLine) {
+        response.status(404).json({ error: "Product not found" });
+        return;
+    }
+    const maxUnits = maxPurchasableUnits(productForLine);
+    if (maxUnits !== null) {
+        const ownerLines = ownerCartItems(db.cartItems.values(), authUserId, guestSessionId);
+        const totalOthers = ownerLines
+            .filter((line) => line.id !== cartItem.id && line.productId === cartItem.productId)
+            .reduce((sum, line) => sum + line.quantity, 0);
+        if (totalOthers + parsed.data.quantity > maxUnits) {
+            response.status(400).json({
+                error: `Only ${maxUnits} unit(s) available for this listing across your cart lines.`
+            });
+            return;
+        }
+    }
     cartItem.quantity = parsed.data.quantity;
-    persistCartItem(cartItem);
+    if (!Array.isArray(cartItem.selections)) {
+        cartItem.selections = [];
+    }
+    try {
+        await persistCartItem(cartItem);
+    } catch (error) {
+        console.error("[PATCH /cart/items] persist", error);
+        response.status(500).json({ error: "Could not update cart" });
+        return;
+    }
     response.json({ ok: true, data: cartItem });
 });
 
 app.delete("/cart/items/:itemId", async (request, response) => {
     const itemId = z.string().min(1).parse(request.params.itemId);
-    const cartItem = db.cartItems.get(itemId);
     const authUserId = await resolveOptionalAuthUserId(request);
     const guestSessionId = getGuestSessionId(request);
+    const authedBuyer = authUserId ? db.users.get(authUserId) : undefined;
+    if (authUserId && authedBuyer?.role === "buyer") {
+        try {
+            await mergeGuestCartIntoBuyer(authUserId, guestSessionId);
+        } catch (error) {
+            console.error("[DELETE /cart/items] merge", error);
+            response.status(500).json({ error: "Could not update cart" });
+            return;
+        }
+    }
+    const cartItem = db.cartItems.get(itemId);
     const isOwner = authUserId
         ? cartItem?.buyerId === authUserId
         : cartItem?.guestSessionId === guestSessionId;
@@ -2474,11 +2693,18 @@ app.delete("/cart/items/:itemId", async (request, response) => {
         return;
     }
     db.cartItems.delete(itemId);
-    deleteCartItem(itemId);
+    try {
+        await deleteCartItem(itemId);
+    } catch (error) {
+        console.error("[DELETE /cart/items]", error);
+        db.cartItems.set(itemId, cartItem);
+        response.status(500).json({ error: "Could not remove cart item" });
+        return;
+    }
     response.json({ ok: true });
 });
 
-app.post("/checkout", authenticate, authorizeRole(["buyer"]), (request, response) => {
+app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, response) => {
     const schema = z.object({
         paymentMethod: z.enum(["cash", "online"]),
         paymentReference: z.string().max(200).optional()
@@ -2491,15 +2717,12 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), (request, response
 
     const buyerId = request.authUserId as string;
     const guestSessionId = getGuestSessionId(request);
-    if (guestSessionId) {
-        const guestItems = [...db.cartItems.values()].filter(
-            (entry) => entry.guestSessionId === guestSessionId
-        );
-        for (const item of guestItems) {
-            item.buyerId = buyerId;
-            delete item.guestSessionId;
-            persistCartItem(item);
-        }
+    try {
+        await mergeGuestCartIntoBuyer(buyerId, guestSessionId);
+    } catch (error) {
+        console.error("[POST /checkout] merge guest cart", error);
+        response.status(500).json({ error: "Could not prepare checkout" });
+        return;
     }
 
     const items = [...db.cartItems.values()].filter((entry) => entry.buyerId === buyerId);
@@ -2551,9 +2774,28 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), (request, response
     persistOrder(order);
     emitOrderUpdated(order);
 
+    const orderCreatedAt = order.createdAt;
+    for (const entry of items) {
+        const lineId = `oli-${randomUUID()}`;
+        const lineItem: OrderLineItemRecord = {
+            id: lineId,
+            orderId: id,
+            productId: entry.productId,
+            quantity: entry.quantity,
+            createdAt: orderCreatedAt,
+            selections: entry.selections
+        };
+        db.orderLineItems.set(lineId, lineItem);
+        persistOrderLineItem(lineItem);
+    }
+
     for (const entry of items) {
         db.cartItems.delete(entry.id);
-        deleteCartItem(entry.id);
+        try {
+            await deleteCartItem(entry.id);
+        } catch (error) {
+            console.error("[POST /checkout] delete cart row", entry.id, error);
+        }
     }
 
     response.status(201).json({ id, status: "created", totalAmount });
@@ -2586,7 +2828,8 @@ app.get("/orders/:id", authenticate, (request, response) => {
         response.status(403).json({ error: "Forbidden" });
         return;
     }
-    response.json({ data: order });
+    const lineItems = [...db.orderLineItems.values()].filter((line) => line.orderId === id);
+    response.json({ data: { order, lineItems } });
 });
 
 app.get("/orders/:id/messages", authenticate, (request, response) => {
@@ -3016,8 +3259,16 @@ app.post(
             await persistSellerLocationChangeRequest(reqRow);
             response.json({ ok: true, data: { request: reqRow, profile } });
         } catch (error) {
-            profile.shopLatitude = previousLat;
-            profile.shopLongitude = previousLng;
+            if (previousLat === undefined) {
+                delete profile.shopLatitude;
+            } else {
+                profile.shopLatitude = previousLat;
+            }
+            if (previousLng === undefined) {
+                delete profile.shopLongitude;
+            } else {
+                profile.shopLongitude = previousLng;
+            }
             reqRow.status = "pending";
             delete reqRow.reviewedAt;
             console.error("[admin/location-requests/approve]", error);

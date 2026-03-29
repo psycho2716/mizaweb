@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, MoreHorizontal, Paperclip, Search, ShoppingBag } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 import { cn } from "@/lib/utils";
@@ -64,6 +64,7 @@ export function DirectMessagesClient({
     maxWidthClass = "max-w-[1600px]"
 }: DirectMessagesClientProps) {
     const router = useRouter();
+    const pathname = usePathname();
     const searchParams = useSearchParams();
     const prefSeller = searchParams.get("seller");
     const prefBuyer = searchParams.get("buyer");
@@ -243,6 +244,10 @@ export function DirectMessagesClient({
     }, [messages]);
 
     if (!token || !user) {
+        const returnTo =
+            pathname +
+            (searchParams.toString() ? `?${searchParams.toString()}` : "");
+        const signInHref = `/auth/login?callbackUrl=${encodeURIComponent(returnTo)}`;
         return (
             <main
                 className={cn("mx-auto w-full flex-1 space-y-4 px-4 py-8 sm:px-6 lg:py-10", maxWidthClass)}
@@ -250,7 +255,7 @@ export function DirectMessagesClient({
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{heading}</h1>
                 <p className="text-sm text-(--muted)">Sign in to read and send messages.</p>
                 <Link
-                    href="/auth/login"
+                    href={signInHref}
                     className="inline-flex h-10 items-center justify-center rounded-md border border-(--border) bg-transparent px-4 text-sm font-medium text-foreground hover:bg-[#12151c]"
                 >
                     Sign in

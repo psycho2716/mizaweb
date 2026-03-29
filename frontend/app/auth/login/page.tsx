@@ -3,21 +3,33 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
 import { loginWithEmailPassword } from "@/lib/api/endpoints";
 import { loginSchema } from "@/types";
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-export default function LoginPage() {
+function defaultPathAfterLogin(role: string): string {
+    if (role === "admin") {
+        return "/admin/verifications";
+    }
+    if (role === "seller") {
+        return "/seller/listings";
+    }
+    return "/products";
+}
+
+function LoginPageContent() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [showPassword, setShowPassword] = useState(false);
     const {
         register,
@@ -31,6 +43,14 @@ export default function LoginPage() {
         }
     });
 
+    const rawCallback =
+        parseSafeCallbackUrl(searchParams.get("callbackUrl")) ??
+        parseSafeCallbackUrl(searchParams.get("next"));
+    const registerHref =
+        rawCallback != null
+            ? `/auth/register?callbackUrl=${encodeURIComponent(rawCallback)}`
+            : "/auth/register";
+
     async function handleLogin(values: LoginFormValues) {
         try {
             const result = await loginWithEmailPassword(values.email, values.password);
@@ -42,13 +62,17 @@ export default function LoginPage() {
                 body: JSON.stringify({ token: result.token, role: result.user.role })
             });
             window.dispatchEvent(new Event("miza-auth-change"));
-            if (result.user.role === "admin") {
-                router.push("/admin/verifications");
-            } else if (result.user.role === "seller") {
-                router.push("/seller/listings");
-            } else {
-                router.push("/products");
-            }
+
+            const userRole = result.user.role;
+            const pending =
+                parseSafeCallbackUrl(searchParams.get("callbackUrl")) ??
+                parseSafeCallbackUrl(searchParams.get("next"));
+            const dest =
+                pending && isCallbackAllowedForRole(pending, userRole)
+                    ? pending
+                    : defaultPathAfterLogin(userRole);
+
+            router.push(dest);
             toast.success("Login successful");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Login failed");
@@ -61,7 +85,7 @@ export default function LoginPage() {
             <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_18%_20%,rgba(34,199,243,0.14),transparent_34%),linear-gradient(140deg,#0a0f16_0%,#0a0d13_48%,#07090f_100%)]" />
             <div className="pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(120deg,rgba(6,10,16,0.2)_10%,rgba(5,8,13,0.58)_55%,rgba(4,6,11,0.84)_100%)]" />
 
-            <div className="relative z-10 grid min-h-screen w-full max-w-7xl mx-auto md:grid-cols-2">
+            <div className="relative z-10 mx-auto grid min-h-screen w-full max-w-7xl md:grid-cols-2">
                 <section className="relative hidden min-h-screen overflow-hidden md:block">
                     <div className="relative flex h-full flex-col justify-between p-10">
                         <div className="space-y-6">
@@ -173,10 +197,7 @@ export default function LoginPage() {
 
                             <div className="flex items-center justify-between pt-1 text-xs uppercase tracking-[0.12em]">
                                 <span className="text-(--muted)">Need access?</span>
-                                <Link
-                                    href="/auth/register"
-                                    className="font-semibold text-(--accent)"
-                                >
+                                <Link href={registerHref} className="font-semibold text-(--accent)">
                                     Create account
                                 </Link>
                             </div>
@@ -186,5 +207,19 @@ export default function LoginPage() {
             </div>
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_84%_16%,rgba(34,199,243,0.09),transparent_36%)]" />
         </main>
+    );
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense
+            fallback={
+                <main className="flex min-h-screen items-center justify-center bg-[#070b11] text-sm text-(--muted)">
+                    Loading…
+                </main>
+            }
+        >
+            <LoginPageContent />
+        </Suspense>
     );
 }

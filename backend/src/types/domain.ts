@@ -86,6 +86,8 @@ export interface CartItem {
     guestSessionId?: string;
     productId: string;
     quantity: number;
+    /** Chosen customization options (empty if the product has none). */
+    selections: CartItemSelection[];
 }
 
 export interface OrderRecord {
@@ -100,6 +102,17 @@ export interface OrderRecord {
     receiptRequestNote?: string;
     totalAmount: number;
     createdAt: string;
+}
+
+/** Snapshot of cart rows at checkout; used for eligibility (e.g. product reviews). */
+export interface OrderLineItemRecord {
+    id: string;
+    orderId: string;
+    productId: string;
+    quantity: number;
+    createdAt: string;
+    /** Snapshot of cart customization choices at checkout. */
+    selections: CartItemSelection[];
 }
 
 export interface OrderMessage {

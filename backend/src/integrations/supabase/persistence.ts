@@ -3,10 +3,12 @@ import { db } from "../../lib/store";
 import type {
     AuthUser,
     CartItem,
+    CartItemSelection,
     ConversationMessageRecord,
     ConversationRecord,
     CustomizationOption,
     CustomizationRule,
+    OrderLineItemRecord,
     OrderRecord,
     OrderMessage,
     ProductMedia,
@@ -20,6 +22,23 @@ import type {
     VerificationSubmission
 } from "../../types/domain";
 import { createSupabaseAdminClient, isSupabaseConfigured } from "./client";
+
+function parseStoredSelections(raw: unknown): CartItemSelection[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const out: CartItemSelection[] = [];
+    for (const x of raw) {
+        if (!x || typeof x !== "object") {
+            continue;
+        }
+        const r = x as { optionId?: unknown; value?: unknown };
+        if (typeof r.optionId === "string" && typeof r.value === "string") {
+            out.push({ optionId: r.optionId, value: r.value });
+        }
+    }
+    return out;
+}
 
 function isAuthUserBanned(u: SupabaseAuthUser): boolean {
     const raw = (u as { banned_until?: string | null }).banned_until;
@@ -175,6 +194,7 @@ interface CartItemRow {
     guest_session_id: string | null;
     product_id: string;
     quantity: number;
+    selections?: unknown;
 }
 
 interface OrderRow {
@@ -197,6 +217,15 @@ interface OrderMessageRow {
     sender_id: string;
     body: string;
     created_at: string;
+}
+
+interface OrderLineItemRow {
+    id: string;
+    order_id: string;
+    product_id: string;
+    quantity: number;
+    created_at: string;
+    selections?: unknown;
 }
 
 interface ProductReviewRow {
@@ -248,6 +277,7 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         ruleRes,
         cartRes,
         orderRes,
+        orderLineItemsRes,
         messageRes,
         productReviewsRes,
         conversationsRes,
@@ -264,6 +294,7 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         supabase.from("app_customization_rules").select("*"),
         supabase.from("app_cart_items").select("*"),
         supabase.from("app_orders").select("*"),
+        supabase.from("app_order_line_items").select("*"),
         supabase.from("app_order_messages").select("*"),
         supabase.from("app_product_reviews").select("*"),
         supabase.from("app_conversations").select("*"),
@@ -412,7 +443,8 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 ...(row.buyer_id ? { buyerId: row.buyer_id } : {}),
                 ...(row.guest_session_id ? { guestSessionId: row.guest_session_id } : {}),
                 productId: row.product_id,
-                quantity: row.quantity
+                quantity: row.quantity,
+                selections: parseStoredSelections(row.selections)
             });
         }
     }
@@ -435,6 +467,21 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 totalAmount: Number(row.total_amount),
                 createdAt: row.created_at
             });
+        }
+    }
+
+    if (orderLineItemsRes.data) {
+        db.orderLineItems.clear();
+        for (const row of orderLineItemsRes.data as OrderLineItemRow[]) {
+            const item: OrderLineItemRecord = {
+                id: row.id,
+                orderId: row.order_id,
+                productId: row.product_id,
+                quantity: row.quantity,
+                createdAt: row.created_at,
+                selections: parseStoredSelections(row.selections)
+            };
+            db.orderLineItems.set(row.id, item);
         }
     }
 
@@ -802,25 +849,61 @@ export async function deleteProductMediaByProduct(productId: string): Promise<vo
     }
 }
 
-export function persistCartItem(row: CartItem): void {
-    const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_cart_items").upsert(
-        {
-            id: row.id,
-            buyer_id: row.buyerId ?? null,
-            guest_session_id: row.guestSessionId ?? null,
-            product_id: row.productId,
-            quantity: row.quantity
-        },
-        { onConflict: "id" }
+function isMissingCartSelectionsColumnError(error: { message?: string; code?: string }): boolean {
+    const msg = (error.message ?? "").toLowerCase();
+    if (error.code === "42703" && msg.includes("selections")) {
+        return true;
+    }
+    if (!msg.includes("selections")) {
+        return false;
+    }
+    return (
+        msg.includes("column") ||
+        msg.includes("does not exist") ||
+        msg.includes("could not find") ||
+        msg.includes("unknown column") ||
+        msg.includes("schema cache")
     );
 }
 
-export function deleteCartItem(cartItemId: string): void {
+export async function persistCartItem(row: CartItem): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_cart_items").delete().eq("id", cartItemId);
+    if (!supabase) {
+        return;
+    }
+    const selections = Array.isArray(row.selections) ? row.selections : [];
+    const basePayload = {
+        id: row.id,
+        buyer_id: row.buyerId ?? null,
+        guest_session_id: row.guestSessionId ?? null,
+        product_id: row.productId,
+        quantity: row.quantity
+    };
+    let { error } = await supabase
+        .from("app_cart_items")
+        .upsert({ ...basePayload, selections }, { onConflict: "id" });
+    if (error && isMissingCartSelectionsColumnError(error)) {
+        console.warn(
+            "[persistCartItem] Retrying without selections (apply migration 0031_cart_and_line_item_selections.sql)"
+        );
+        ({ error } = await supabase.from("app_cart_items").upsert(basePayload, { onConflict: "id" }));
+    }
+    if (error) {
+        console.error("[persistCartItem]", error.message);
+        throw new Error(`Failed to persist cart item: ${error.message}`);
+    }
+}
+
+export async function deleteCartItem(cartItemId: string): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_cart_items").delete().eq("id", cartItemId);
+    if (error) {
+        console.error("[deleteCartItem]", error.message);
+        throw new Error(`Failed to delete cart item: ${error.message}`);
+    }
 }
 
 export function persistOrder(row: OrderRecord): void {
@@ -842,6 +925,28 @@ export function persistOrder(row: OrderRecord): void {
         },
         { onConflict: "id" }
     );
+}
+
+export function persistOrderLineItem(row: OrderLineItemRecord): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_order_line_items").upsert(
+        {
+            id: row.id,
+            order_id: row.orderId,
+            product_id: row.productId,
+            quantity: row.quantity,
+            created_at: row.createdAt,
+            selections: row.selections
+        },
+        { onConflict: "id" }
+    );
+}
+
+export function deleteOrderLineItem(lineItemId: string): void {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) return;
+    void supabase.from("app_order_line_items").delete().eq("id", lineItemId);
 }
 
 export function persistOrderMessage(row: OrderMessage): void {

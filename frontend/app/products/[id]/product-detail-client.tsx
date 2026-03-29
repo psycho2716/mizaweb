@@ -1,34 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-    Box,
-    ChevronRight,
-    Image as ImageIcon,
-    MessageCircle,
-    Quote,
-    ShoppingBag,
-    Star,
-    Store
-} from "lucide-react";
+import { ChevronRight, MessageCircle, Quote, ShoppingBag, Star, Store } from "lucide-react";
 import { toast } from "sonner";
+import { ProductViewModeToggle } from "@/components/product/product-view-mode-toggle";
 import { ProductModelPreview } from "@/components/seller/product-model-preview";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ApiRequestError } from "@/lib/api/client";
 import {
     addCartItem,
-    checkoutCart,
+    clearCartItems,
+    getProductReviewEligibility,
     getProductReviews,
     postProductReview
 } from "@/lib/api/endpoints";
-import { getListingVideoPlayerKind, listingYoutubeEmbedUrl } from "@/lib/listing-video";
+import { getListingVideoPlayerKind, listingYoutubeEmbedUrlAutoplay } from "@/lib/listing-video";
 import { buildProductModelViewerCustomization } from "@/lib/product-model-viewer-customization";
 import { cn, formatPeso } from "@/lib/utils";
 import type {
     AuthUser,
+    CartItemSelection,
     ProductDetail,
+    ProductHeroMediaMode,
     ProductOption,
     ProductReview,
     ProductReviewSummary
@@ -172,10 +168,20 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
     const router = useRouter();
     const model3dUrl = product.model3dUrl?.trim() ?? "";
     const hasModel3d = model3dUrl.length > 0;
+    const listingVideoUrl = product.videoUrl?.trim() ?? "";
+    const hasListingVideo = listingVideoUrl.length > 0;
 
     const [quantity, setQuantity] = useState(1);
     const [selectedImage, setSelectedImage] = useState(product.media[0]?.url ?? "");
-    const [threeDActive, setThreeDActive] = useState(hasModel3d && product.media.length === 0);
+    const [heroMediaMode, setHeroMediaMode] = useState<ProductHeroMediaMode>(() => {
+        const hasVideo = (product.videoUrl?.trim() ?? "").length > 0;
+        const has3d = (product.model3dUrl?.trim() ?? "").length > 0;
+        if (has3d && product.media.length === 0 && !hasVideo) {
+            return "3d";
+        }
+        return "image";
+    });
+    const [videoMountKey, setVideoMountKey] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [selectedSpecs, setSelectedSpecs] = useState<Record<string, string>>({});
     const [viewer, setViewer] = useState<AuthUser | null>(null);
@@ -186,6 +192,40 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
     const [ratingPick, setRatingPick] = useState(5);
     const [reviewBody, setReviewBody] = useState("");
     const [reviewSubmitting, setReviewSubmitting] = useState(false);
+    const [reviewGate, setReviewGate] = useState<{
+        loading: boolean;
+        hasCompletedPurchase: boolean;
+        eligible: boolean;
+        cooldownEndsAt: string | null;
+    } | null>(null);
+
+    const heroModes = useMemo((): ProductHeroMediaMode[] => {
+        const modes: ProductHeroMediaMode[] = [];
+        if (!hasModel3d && !hasListingVideo) {
+            return modes;
+        }
+        modes.push("image");
+        if (hasModel3d) {
+            modes.push("3d");
+        }
+        if (hasListingVideo) {
+            modes.push("video");
+        }
+        return modes;
+    }, [hasModel3d, hasListingVideo]);
+
+    const handleHeroMediaSelect = useCallback((mode: ProductHeroMediaMode) => {
+        setHeroMediaMode(mode);
+        if (mode === "video") {
+            setVideoMountKey((k) => k + 1);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!heroModes.includes(heroMediaMode)) {
+            setHeroMediaMode("image");
+        }
+    }, [heroModes, heroMediaMode]);
 
     useEffect(() => {
         try {
@@ -204,6 +244,62 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
             .then((r) => setReviews(r.data))
             .catch(() => setReviews([]));
     }, [product.id, product.isPublished]);
+
+    useEffect(() => {
+        if (!product.isPublished || viewer?.role !== "buyer") {
+            setReviewGate(null);
+            return;
+        }
+        const tok = typeof window !== "undefined" ? localStorage.getItem("miza_token") : null;
+        if (!tok) {
+            setReviewGate(null);
+            return;
+        }
+        let cancelled = false;
+        setReviewGate({
+            loading: true,
+            hasCompletedPurchase: false,
+            eligible: false,
+            cooldownEndsAt: null
+        });
+        void getProductReviewEligibility(product.id)
+            .then((res) => {
+                if (cancelled) {
+                    return;
+                }
+                setReviewGate({
+                    loading: false,
+                    hasCompletedPurchase: res.data.hasCompletedPurchase,
+                    eligible: res.data.eligible,
+                    cooldownEndsAt: res.data.cooldownEndsAt
+                });
+            })
+            .catch(() => {
+                if (cancelled) {
+                    return;
+                }
+                setReviewGate({
+                    loading: false,
+                    hasCompletedPurchase: false,
+                    eligible: false,
+                    cooldownEndsAt: null
+                });
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [product.id, product.isPublished, viewer?.role]);
+
+    useEffect(() => {
+        if (!viewer?.id) {
+            return;
+        }
+        const mine = reviews.find((r) => r.buyerId === viewer.id);
+        if (mine) {
+            setRatingPick(mine.rating);
+            setReviewBody(mine.body);
+        }
+    }, [reviews, viewer?.id]);
 
     const maxPurchasableQuantity = useMemo(() => {
         if (product.madeToOrder) {
@@ -248,6 +344,17 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
     const outOfStock = maxPurchasableQuantity === 0;
     const canPurchase = !outOfStock && quantity >= 1;
 
+    const buildCartSelectionsPayload = useCallback((): CartItemSelection[] => {
+        return product.options
+            .map((o) => {
+                const picked = selectedSpecs[o.id];
+                const value =
+                    picked && o.values.includes(picked) ? picked : (o.values[0] ?? "");
+                return { optionId: o.id, value };
+            })
+            .filter((row) => row.value.length > 0);
+    }, [product.options, selectedSpecs]);
+
     async function handleAddToCart() {
         if (!canPurchase || quantity < 1) {
             toast.error(outOfStock ? "This item is out of stock." : "Choose a valid quantity.");
@@ -255,7 +362,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
         }
         setIsSubmitting(true);
         try {
-            await addCartItem(product.id, quantity);
+            await addCartItem(product.id, quantity, buildCartSelectionsPayload());
             toast.success("Added to cart");
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Failed to add to cart");
@@ -271,19 +378,42 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
         }
         const token = typeof window !== "undefined" ? localStorage.getItem("miza_token") : null;
         if (!token) {
-            toast.info("Please login before checkout.");
-            router.push("/auth/login");
+            const params = new URLSearchParams({
+                prepareBuy: product.id,
+                qty: String(quantity)
+            });
+            const specs = buildCartSelectionsPayload();
+            if (specs.length > 0) {
+                params.set("specs", encodeURIComponent(JSON.stringify(specs)));
+            }
+            router.push(
+                `/auth/login?callbackUrl=${encodeURIComponent(`/buyer/checkout?${params}`)}`
+            );
+            return;
+        }
+        let buyerRole = viewer?.role;
+        if (!buyerRole && typeof window !== "undefined") {
+            try {
+                const raw = localStorage.getItem("miza_user");
+                buyerRole = raw
+                    ? ((JSON.parse(raw) as AuthUser).role as AuthUser["role"])
+                    : undefined;
+            } catch {
+                buyerRole = undefined;
+            }
+        }
+        if (buyerRole !== "buyer") {
+            toast.error("Sign in with a shopper account to buy.");
             return;
         }
 
         setIsSubmitting(true);
         try {
-            await addCartItem(product.id, quantity);
-            await checkoutCart({ paymentMethod: "cash" });
-            toast.success("Order placed");
-            router.push("/buyer/orders");
+            await clearCartItems();
+            await addCartItem(product.id, quantity, buildCartSelectionsPayload());
+            router.push("/buyer/checkout");
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Checkout failed");
+            toast.error(error instanceof Error ? error.message : "Could not start checkout");
         } finally {
             setIsSubmitting(false);
         }
@@ -306,15 +436,39 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
             });
             setReviewBody("");
             toast.success("Thanks — your review is live.");
+            try {
+                const elig = await getProductReviewEligibility(product.id);
+                setReviewGate({
+                    loading: false,
+                    hasCompletedPurchase: elig.data.hasCompletedPurchase,
+                    eligible: elig.data.eligible,
+                    cooldownEndsAt: elig.data.cooldownEndsAt
+                });
+            } catch {
+                /* ignore */
+            }
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Could not save review");
+            if (error instanceof ApiRequestError && error.cooldownEndsAt) {
+                toast.error(
+                    `${error.message} You can post again after ${new Date(error.cooldownEndsAt).toLocaleString()}.`
+                );
+            } else {
+                toast.error(error instanceof Error ? error.message : "Could not save review");
+            }
         } finally {
             setReviewSubmitting(false);
         }
     }
 
     const token = typeof window !== "undefined" ? localStorage.getItem("miza_token") : null;
-    const canReview = Boolean(token && viewer?.role === "buyer" && product.isPublished);
+    const showWriteReviewCard = Boolean(
+        token &&
+        viewer?.role === "buyer" &&
+        product.isPublished &&
+        reviewGate &&
+        !reviewGate.loading &&
+        reviewGate.eligible
+    );
 
     const lineTotal = product.basePrice * Math.max(0, quantity);
 
@@ -324,7 +478,8 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
           ? `${product.stockQuantity} available`
           : null;
 
-    const showHero3d = hasModel3d && threeDActive;
+    const showHero3d = hasModel3d && heroMediaMode === "3d";
+    const showHeroVideo = hasListingVideo && heroMediaMode === "video";
 
     const viewerCustomization = useMemo(
         () => buildProductModelViewerCustomization(product.options, selectedSpecs),
@@ -333,12 +488,12 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
 
     const showLivePreviewHint = hasModel3d && product.options.length > 0;
 
-    const listingVideoUrl = product.videoUrl?.trim() ?? "";
     const listingVideoIsYoutube =
         listingVideoUrl.length > 0 && getListingVideoPlayerKind(listingVideoUrl) === "youtube";
-    const listingYoutubeIframeSrc = listingVideoIsYoutube
-        ? listingYoutubeEmbedUrl(listingVideoUrl)
-        : null;
+    const listingYoutubeIframeSrcAutoplay =
+        listingVideoIsYoutube && listingVideoUrl.length > 0
+            ? listingYoutubeEmbedUrlAutoplay(listingVideoUrl)
+            : null;
 
     return (
         <main className="mx-auto flex max-w-6xl flex-1 flex-col gap-10 px-4 py-8 sm:px-6 lg:py-12">
@@ -359,110 +514,106 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
             <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-12 lg:items-start">
                 {/* Media column */}
                 <div className="space-y-4">
-                    {hasModel3d ? (
-                        <div className="relative overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#06080c]/75 p-3 shadow-[0_0_40px_-12px_var(--accent)] backdrop-blur-md sm:flex sm:items-center sm:justify-between sm:gap-4">
-                            <div
-                                className="pointer-events-none absolute inset-0 bg-[linear-gradient(105deg,transparent_40%,rgba(34,211,238,0.04)_50%,transparent_60%)]"
-                                aria-hidden
-                            />
-                            <div className="relative mb-3 sm:mb-0">
-                                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-(--accent) drop-shadow-[0_0_12px_var(--accent)]">
-                                    Active view
-                                </p>
-                                <p className="mt-0.5 text-xs font-medium tracking-tight text-foreground">
-                                    {showHero3d ? "3D model" : "Photo gallery"}
-                                </p>
-                            </div>
-                            <div
-                                className="relative isolate flex w-full min-w-[min(100%,15.5rem)] max-w-68 shrink-0 rounded-2xl border border-white/10 bg-black/35 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-sm sm:ml-auto sm:w-auto"
-                                role="group"
-                                aria-label="Toggle 3D viewer"
-                            >
-                                <span
-                                    aria-hidden
-                                    className={cn(
-                                        "absolute bottom-1 top-1 w-[calc(50%-6px)] rounded-xl bg-linear-to-b from-cyan-100 via-cyan-300 to-cyan-500",
-                                        "shadow-[0_0_22px_rgba(34,211,238,0.55),0_0_40px_rgba(34,211,238,0.2),inset_0_1px_0_rgba(255,255,255,0.45)]",
-                                        "motion-safe:transition-[left,box-shadow] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]",
-                                        showHero3d ? "left-[calc(50%+2px)]" : "left-1"
-                                    )}
+                    <div className="rounded-[1.85rem] border border-white/10 bg-[linear-gradient(165deg,#161b24_0%,#0c0f14_55%,#090c11_100%)] p-2 shadow-[inset_0_2px_18px_rgba(0,0,0,0.65),0_0_0_1px_rgba(0,0,0,0.4),0_12px_40px_-24px_rgba(34,199,243,0.12)]">
+                        <div
+                            className={cn(
+                                "relative aspect-square w-full overflow-hidden rounded-2xl border border-white/[0.07] bg-[#050608] shadow-[inset_0_2px_12px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.04)]",
+                                (showHero3d || showHeroVideo) &&
+                                    "border-(--accent)/30 shadow-[inset_0_2px_12px_rgba(0,0,0,0.5),0_0_24px_-8px_rgba(34,199,243,0.2)]"
+                            )}
+                        >
+                            {showHero3d ? (
+                                <ProductModelPreview
+                                    key={model3dUrl}
+                                    modelUrl={model3dUrl}
+                                    customization={viewerCustomization}
+                                    className="absolute inset-0 h-full min-h-0 w-full cursor-grab active:cursor-grabbing"
                                 />
-                                <button
-                                    type="button"
-                                    onClick={() => setThreeDActive(false)}
-                                    className={cn(
-                                        "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors duration-300 motion-reduce:transition-none",
-                                        !showHero3d
-                                            ? "text-zinc-950"
-                                            : "text-zinc-500 hover:text-zinc-200"
+                            ) : showHeroVideo ? (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black">
+                                    {listingVideoIsYoutube && listingYoutubeIframeSrcAutoplay ? (
+                                        <iframe
+                                            key={videoMountKey}
+                                            src={listingYoutubeIframeSrcAutoplay}
+                                            title={`${product.title} — listing video`}
+                                            className="h-full w-full border-0"
+                                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                            allowFullScreen
+                                        />
+                                    ) : listingVideoIsYoutube ? (
+                                        <div className="flex max-w-md flex-col items-center justify-center gap-3 px-4 text-center text-sm text-(--muted)">
+                                            <p>This YouTube link could not be embedded.</p>
+                                            <a
+                                                href={listingVideoUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="font-semibold text-(--accent) underline-offset-4 hover:underline"
+                                            >
+                                                Open video on YouTube →
+                                            </a>
+                                        </div>
+                                    ) : (
+                                        <video
+                                            key={videoMountKey}
+                                            src={listingVideoUrl}
+                                            controls
+                                            playsInline
+                                            muted
+                                            autoPlay
+                                            preload="auto"
+                                            className="h-full w-full object-contain"
+                                            aria-label={`Video for ${product.title}`}
+                                        >
+                                            Your browser does not support embedded video.
+                                        </video>
                                     )}
-                                >
-                                    <ImageIcon
-                                        className="h-3.5 w-3.5 opacity-90"
-                                        strokeWidth={2}
-                                        aria-hidden
-                                    />
-                                    Image Viewer
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setThreeDActive(true)}
-                                    className={cn(
-                                        "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors duration-300 motion-reduce:transition-none",
-                                        showHero3d
-                                            ? "text-zinc-950"
-                                            : "text-zinc-500 hover:text-zinc-200"
-                                    )}
-                                >
-                                    <Box
-                                        className="h-3.5 w-3.5 opacity-90"
-                                        strokeWidth={2}
-                                        aria-hidden
-                                    />
-                                    3D Viewer
-                                </button>
-                            </div>
+                                </div>
+                            ) : selectedImage ? (
+                                <img
+                                    src={selectedImage}
+                                    alt={product.title}
+                                    className="h-full w-full object-cover"
+                                />
+                            ) : (
+                                <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-2 px-6 text-center text-sm text-(--muted)">
+                                    <p>No photos yet.</p>
+                                    {hasModel3d ? (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleHeroMediaSelect("3d")}
+                                        >
+                                            Open 3D preview
+                                        </Button>
+                                    ) : null}
+                                    {hasListingVideo ? (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleHeroMediaSelect("video")}
+                                        >
+                                            Play listing video
+                                        </Button>
+                                    ) : null}
+                                </div>
+                            )}
+                            {showHero3d ? (
+                                <p className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-[10px] font-medium uppercase tracking-wider text-(--muted)">
+                                    Drag to rotate · scroll to zoom
+                                </p>
+                            ) : null}
                         </div>
-                    ) : null}
 
-                    <div
-                        className={cn(
-                            "relative aspect-square w-full overflow-hidden rounded-xl border border-(--accent)/20 bg-[#050608] ring-1 ring-white/6",
-                            showHero3d && "border-(--accent)/35"
-                        )}
-                    >
-                        {showHero3d ? (
-                            <ProductModelPreview
-                                key={model3dUrl}
-                                modelUrl={model3dUrl}
-                                customization={viewerCustomization}
-                                className="absolute inset-0 h-full min-h-0 w-full cursor-grab active:cursor-grabbing"
-                            />
-                        ) : selectedImage ? (
-                            <img
-                                src={selectedImage}
-                                alt={product.title}
-                                className="h-full w-full object-cover"
-                            />
-                        ) : (
-                            <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-2 px-6 text-center text-sm text-(--muted)">
-                                <p>No photos yet.</p>
-                                {hasModel3d ? (
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setThreeDActive(true)}
-                                    >
-                                        Open 3D preview
-                                    </Button>
-                                ) : null}
+                        {heroModes.length >= 2 ? (
+                            <div className="mt-3 px-1 pb-0.5 sm:mt-3.5">
+                                <ProductViewModeToggle
+                                    modes={heroModes}
+                                    active={heroMediaMode}
+                                    onSelect={handleHeroMediaSelect}
+                                />
                             </div>
-                        )}
-                        {showHero3d ? (
-                            <p className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-[10px] font-medium uppercase tracking-wider text-(--muted)">
-                                Drag to rotate · scroll to zoom
-                            </p>
                         ) : null}
                     </div>
 
@@ -474,11 +625,11 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                                     type="button"
                                     onClick={() => {
                                         setSelectedImage(image.url);
-                                        setThreeDActive(false);
+                                        handleHeroMediaSelect("image");
                                     }}
                                     className={cn(
                                         "rounded-lg border bg-[#080b10] p-1 ring-1 ring-white/4 transition-colors",
-                                        selectedImage === image.url && !showHero3d
+                                        selectedImage === image.url && heroMediaMode === "image"
                                             ? "border-(--accent) ring-(--accent)/30"
                                             : "border-(--border) hover:border-(--accent)/40"
                                     )}
@@ -491,51 +642,6 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                                 </button>
                             ))}
                         </div>
-                    ) : null}
-
-                    {listingVideoUrl ? (
-                        <section
-                            className="overflow-hidden rounded-xl border border-(--border) bg-[#050608] ring-1 ring-white/4"
-                            aria-label="Listing video"
-                        >
-                            <p className="border-b border-(--border)/60 bg-[#080b10]/90 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                                Listing video
-                            </p>
-                            <div className="relative aspect-video w-full bg-black">
-                                {listingVideoIsYoutube && listingYoutubeIframeSrc ? (
-                                    <iframe
-                                        src={listingYoutubeIframeSrc}
-                                        title={`${product.title} — listing video`}
-                                        className="absolute inset-0 h-full w-full border-0"
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                        allowFullScreen
-                                    />
-                                ) : listingVideoIsYoutube ? (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#080b10] px-4 text-center text-sm text-(--muted)">
-                                        <p>This YouTube link could not be embedded.</p>
-                                        <a
-                                            href={listingVideoUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="font-semibold text-(--accent) underline-offset-4 hover:underline"
-                                        >
-                                            Open video on YouTube →
-                                        </a>
-                                    </div>
-                                ) : (
-                                    <video
-                                        src={listingVideoUrl}
-                                        controls
-                                        playsInline
-                                        preload="metadata"
-                                        className="absolute inset-0 h-full w-full object-contain"
-                                        aria-label={`Video preview for ${product.title}`}
-                                    >
-                                        Your browser does not support embedded video.
-                                    </video>
-                                )}
-                            </div>
-                        </section>
                     ) : null}
                 </div>
 
@@ -649,7 +755,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                     {product.options.length > 0 ? (
                         <div className="space-y-4 rounded-xl border border-(--border) bg-[#080b10]/60 p-5">
                             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--accent)">
-                                Options
+                                Product Customizations
                             </p>
                             <div className="space-y-4">
                                 {product.options.map((option) => (
@@ -718,7 +824,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                             </Link>
                         ) : (
                             <Link
-                                href="/auth/login"
+                                href={`/auth/login?callbackUrl=${encodeURIComponent(`/buyer/messages?seller=${product.sellerId}`)}`}
                                 className="inline-flex items-center gap-2 text-sm text-(--muted) underline-offset-4 hover:text-(--accent) hover:underline"
                             >
                                 Sign in to message the seller
@@ -773,39 +879,72 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                         </div>
 
                         <div className="space-y-4">
-                            {canReview ? (
-                                <div className="rounded-xl border border-(--border) bg-[#080b10]/90 p-5 ring-1 ring-white/4">
-                                    <p className="text-xs font-semibold uppercase tracking-wider text-(--muted)">
-                                        Write a review
-                                    </p>
-                                    <div className="mt-2">
-                                        <InteractiveStars
-                                            value={ratingPick}
-                                            onChange={setRatingPick}
-                                        />
-                                    </div>
-                                    <Textarea
-                                        className="mt-3 min-h-[88px] border-(--border) bg-[#050608] text-foreground"
-                                        placeholder="Share what you liked or what could be better…"
-                                        value={reviewBody}
-                                        onChange={(e) => setReviewBody(e.target.value)}
-                                    />
-                                    <Button
-                                        type="button"
-                                        className="mt-3 bg-(--accent) text-[#050608] hover:bg-(--accent)/90"
-                                        disabled={reviewSubmitting}
-                                        onClick={() => void handleSubmitReview()}
-                                    >
-                                        {reviewSubmitting ? "Saving…" : "Post review"}
-                                    </Button>
-                                    <p className="mt-2 text-xs text-(--muted)">
-                                        One review per account — you can update yours anytime.
-                                    </p>
-                                </div>
+                            {token && viewer?.role === "buyer" ? (
+                                <>
+                                    {reviewGate === null || reviewGate.loading ? (
+                                        <p className="rounded-xl border border-(--border) bg-[#080b10]/60 px-5 py-4 text-sm text-(--muted)">
+                                            Checking review options…
+                                        </p>
+                                    ) : null}
+                                    {showWriteReviewCard ? (
+                                        <div className="rounded-xl border border-(--border) bg-[#080b10]/90 p-5 ring-1 ring-white/4">
+                                            <p className="text-xs font-semibold uppercase tracking-wider text-(--muted)">
+                                                Write a review
+                                            </p>
+                                            <div className="mt-2">
+                                                <InteractiveStars
+                                                    value={ratingPick}
+                                                    onChange={setRatingPick}
+                                                />
+                                            </div>
+                                            <Textarea
+                                                className="mt-3 min-h-[88px] border-(--border) bg-[#050608] text-foreground"
+                                                placeholder="Share what you liked or what could be better…"
+                                                value={reviewBody}
+                                                onChange={(e) => setReviewBody(e.target.value)}
+                                            />
+                                            <Button
+                                                type="button"
+                                                className="mt-3 bg-(--accent) text-[#050608] hover:bg-(--accent)/90"
+                                                disabled={reviewSubmitting}
+                                                onClick={() => void handleSubmitReview()}
+                                            >
+                                                {reviewSubmitting ? "Saving…" : "Post review"}
+                                            </Button>
+                                            <p className="mt-2 text-xs text-(--muted)">
+                                                After a delivered order, you can post or update a
+                                                review for this product once every 30 days.
+                                            </p>
+                                        </div>
+                                    ) : null}
+                                    {reviewGate && !reviewGate.loading && !reviewGate.eligible ? (
+                                        <p className="rounded-xl border border-(--border) bg-[#080b10]/60 px-5 py-4 text-sm text-(--muted)">
+                                            {!reviewGate.hasCompletedPurchase ? (
+                                                <>
+                                                    You can leave a review for this product once you
+                                                    have ordered and received it from this shop.
+                                                </>
+                                            ) : reviewGate.cooldownEndsAt ? (
+                                                <>
+                                                    You recently posted or updated your review. You
+                                                    can change it again after{" "}
+                                                    <span className="font-medium text-foreground">
+                                                        {new Date(
+                                                            reviewGate.cooldownEndsAt
+                                                        ).toLocaleString()}
+                                                    </span>
+                                                    .
+                                                </>
+                                            ) : (
+                                                "You cannot post a review for this product right now."
+                                            )}
+                                        </p>
+                                    ) : null}
+                                </>
                             ) : (
                                 <p className="rounded-xl border border-(--border) bg-[#080b10]/60 px-5 py-4 text-sm text-(--muted)">
                                     <Link
-                                        href="/auth/login"
+                                        href={`/auth/login?callbackUrl=${encodeURIComponent(`/products/${product.id}`)}`}
                                         className="font-semibold text-(--accent) underline-offset-4 hover:underline"
                                     >
                                         Sign in as a shopper
