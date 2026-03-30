@@ -11,9 +11,11 @@ import {
     updateCartItemQuantity
 } from "@/lib/api/endpoints";
 import { useMizaStoredUser } from "@/hooks/use-miza-stored-user";
-import { formatCartSelectionsLine } from "@/lib/format-cart-selections";
+import { getCartSelectionRows } from "@/lib/format-cart-selections";
+import { normalizeCartItemSelections } from "@/lib/normalize-cart-item-selections";
 import { cn, formatPeso, getAppName } from "@/lib/utils";
 import type { CartItemResponse, ProductDetail } from "@/types";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 
 function maxQtyForProduct(p: ProductDetail | undefined): number {
     if (!p) return 99;
@@ -24,6 +26,7 @@ function maxQtyForProduct(p: ProductDetail | undefined): number {
 export function CartRegistryClient() {
     const appName = getAppName();
     const { user } = useMizaStoredUser();
+    const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
     const [items, setItems] = useState<CartItemResponse[]>([]);
     const [productMap, setProductMap] = useState<Record<string, ProductDetail>>({});
     const [loading, setLoading] = useState(true);
@@ -112,6 +115,15 @@ export function CartRegistryClient() {
     }
 
     async function removeRow(row: CartItemResponse) {
+        const ok = await requestConfirm({
+            title: "Remove this item from your cart?",
+            description: "This will delete the item from your cart registry.",
+            confirmLabel: "Remove",
+            destructive: true
+        });
+        if (!ok) {
+            return;
+        }
         setBusyId(row.id);
         try {
             await removeCartItem(row.id);
@@ -192,7 +204,10 @@ export function CartRegistryClient() {
                                     const unit = p?.basePrice ?? 0;
                                     const line = unit * row.quantity;
                                     const max = maxQtyForProduct(p);
-                                    const specLine = formatCartSelectionsLine(p, row.selections);
+                                    const specRows = getCartSelectionRows(
+                                        p,
+                                        normalizeCartItemSelections(row.selections)
+                                    );
                                     const disabled = busyId === row.id;
 
                                     return (
@@ -231,6 +246,28 @@ export function CartRegistryClient() {
                                                         {p?.title ??
                                                             `Product ${row.productId.slice(0, 8)}…`}
                                                     </Link>
+                                                    {specRows.length > 0 ? (
+                                                        <ul className="mt-2 space-y-0.5">
+                                                            {specRows.map((spec, idx) => (
+                                                                <li
+                                                                    key={`${spec.label}-${spec.value}-${idx}`}
+                                                                    className="text-xs leading-snug text-(--muted)"
+                                                                >
+                                                                    {spec.label ? (
+                                                                        <>
+                                                                            <span className="font-medium text-foreground/85">
+                                                                                {spec.label}
+                                                                            </span>
+                                                                            <span>: </span>
+                                                                            <span>{spec.value}</span>
+                                                                        </>
+                                                                    ) : (
+                                                                        spec.value
+                                                                    )}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : null}
                                                     <div className="mt-2 flex flex-wrap gap-1.5">
                                                         {p?.madeToOrder ? (
                                                             <span className="rounded border border-white/15 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-(--muted)">
@@ -242,11 +279,6 @@ export function CartRegistryClient() {
                                                             </span>
                                                         )}
                                                     </div>
-                                                    {specLine ? (
-                                                        <p className="mt-2 text-xs text-(--muted)">
-                                                            {specLine}
-                                                        </p>
-                                                    ) : null}
                                                     <button
                                                         type="button"
                                                         onClick={() => removeRow(row)}
@@ -366,6 +398,7 @@ export function CartRegistryClient() {
                         </aside>
                     </div>
                 )}
+            {confirmDialog}
             </div>
         </main>
     );

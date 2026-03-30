@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -89,8 +89,29 @@ function catalogPriceBounds(products: Product[]): { min: number; max: number } {
     if (products.length === 0) {
         return { min: 0, max: 0 };
     }
-    const prices = products.map((p) => p.basePrice);
+    const prices = products.map((p) => Number(p.basePrice)).filter((n) => Number.isFinite(n));
+    if (prices.length === 0) {
+        return { min: 0, max: 0 };
+    }
     return { min: Math.min(...prices), max: Math.max(...prices) };
+}
+
+/** Clamp parsed min/max to catalog bounds and order; used for blur sync and filter math. */
+function clampPricePairToCatalog(
+    rawMin: string,
+    rawMax: string,
+    bounds: { min: number; max: number }
+): { lo: number; hi: number; minStr: string; maxStr: string } {
+    const parsedMin = parsePesoFilterInput(rawMin);
+    const parsedMax = parsePesoFilterInput(rawMax);
+    let lo = parsedMin ?? bounds.min;
+    let hi = parsedMax ?? bounds.max;
+    lo = Math.max(bounds.min, Math.min(bounds.max, lo));
+    hi = Math.max(bounds.min, Math.min(bounds.max, hi));
+    if (lo > hi) {
+        [lo, hi] = [hi, lo];
+    }
+    return { lo, hi, minStr: String(lo), maxStr: String(hi) };
 }
 
 function visiblePageNumbers(current: number, total: number): number[] {
@@ -150,9 +171,7 @@ function CatalogResults({
             {pageItems.length === 0 ? (
                 <div className="rounded-2xl border border-(--border) bg-[#080b10]/60 py-16 text-center">
                     <p className="text-lg font-semibold text-foreground">No matches</p>
-                    <p className="mt-2 text-sm text-(--muted)">
-                        Try adjusting filters or search.
-                    </p>
+                    <p className="mt-2 text-sm text-(--muted)">Try adjusting filters or search.</p>
                     {hasActiveFilters ? (
                         <button
                             type="button"
@@ -290,21 +309,48 @@ export function ProductsListingClient({ initialProducts }: ProductsListingClient
 
     const priceBounds = useMemo(() => catalogPriceBounds(initialProducts), [initialProducts]);
 
+    /** When the catalog set changes (e.g. seller filter), reset price inputs to full range. */
+    const catalogIdentityKey = useMemo(
+        () => initialProducts.map((p) => p.id).sort().join(","),
+        [initialProducts]
+    );
+
+    useEffect(() => {
+        if (initialProducts.length === 0) {
+            setPriceMinInput("");
+            setPriceMaxInput("");
+            return;
+        }
+        const { min, max } = catalogPriceBounds(initialProducts);
+        setPriceMinInput(String(min));
+        setPriceMaxInput(String(max));
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- only reset when listing ids change; initialProducts matches that render
+    }, [catalogIdentityKey]);
+
+    const syncPriceInputsOnBlur = useCallback(() => {
+        if (initialProducts.length === 0) {
+            return;
+        }
+        const { minStr, maxStr } = clampPricePairToCatalog(
+            priceMinInput,
+            priceMaxInput,
+            priceBounds
+        );
+        setPriceMinInput(minStr);
+        setPriceMaxInput(maxStr);
+    }, [initialProducts.length, priceMinInput, priceMaxInput, priceBounds]);
+
     const priceFilterRange = useMemo(() => {
         if (initialProducts.length === 0) {
             return { lo: 0, hi: 0 };
         }
-        const parsedMin = parsePesoFilterInput(priceMinInput);
-        const parsedMax = parsePesoFilterInput(priceMaxInput);
-        let lo = parsedMin ?? priceBounds.min;
-        let hi = parsedMax ?? priceBounds.max;
-        lo = Math.max(priceBounds.min, Math.min(priceBounds.max, lo));
-        hi = Math.max(priceBounds.min, Math.min(priceBounds.max, hi));
-        if (lo > hi) {
-            [lo, hi] = [hi, lo];
-        }
+        const { lo, hi } = clampPricePairToCatalog(
+            priceMinInput,
+            priceMaxInput,
+            priceBounds
+        );
         return { lo, hi };
-    }, [initialProducts.length, priceMinInput, priceMaxInput, priceBounds.min, priceBounds.max]);
+    }, [initialProducts.length, priceMinInput, priceMaxInput, priceBounds]);
 
     const filterSignature = useMemo(
         () =>
@@ -470,8 +516,20 @@ export function ProductsListingClient({ initialProducts }: ProductsListingClient
                                 Price (₱)
                             </p>
                             <p className="text-[11px] leading-snug text-(--muted)/90">
-                                Range is clamped to prices in this catalog (
-                                {formatPeso(priceBounds.min)} – {formatPeso(priceBounds.max)}).
+                                {initialProducts.length === 0 ? (
+                                    <>No listings to price-filter yet.</>
+                                ) : priceBounds.min === priceBounds.max ? (
+                                    <>
+                                        All listings in this catalog are {formatPeso(priceBounds.min)}{" "}
+                                        (min and max stay aligned on blur).
+                                    </>
+                                ) : (
+                                    <>
+                                        Allowed range follows this catalog (
+                                        {formatPeso(priceBounds.min)} – {formatPeso(priceBounds.max)}
+                                        ). Out-of-range values snap back when you leave a field.
+                                    </>
+                                )}
                             </p>
                             <div className="grid grid-cols-2 gap-3">
                                 <label className="text-xs text-(--muted)">
@@ -481,6 +539,7 @@ export function ProductsListingClient({ initialProducts }: ProductsListingClient
                                         inputMode="numeric"
                                         value={priceMinInput}
                                         onChange={(e) => setPriceMinInput(e.target.value)}
+                                        onBlur={syncPriceInputsOnBlur}
                                         className={fieldClass}
                                         aria-label="Minimum price in pesos"
                                     />
@@ -492,6 +551,7 @@ export function ProductsListingClient({ initialProducts }: ProductsListingClient
                                         inputMode="numeric"
                                         value={priceMaxInput}
                                         onChange={(e) => setPriceMaxInput(e.target.value)}
+                                        onBlur={syncPriceInputsOnBlur}
                                         className={fieldClass}
                                         aria-label="Maximum price in pesos"
                                     />

@@ -138,6 +138,12 @@ export interface OrderRecord {
     shippingPostalCode?: string;
     shippingContactNumber?: string;
     deliveryNotes?: string;
+    /** Optional: courier / carrier name (seller adds for the buyer). */
+    fulfillmentCarrierName?: string;
+    /** Optional: tracking or reference number. */
+    fulfillmentTrackingNumber?: string;
+    /** Optional: extra shipment notes (meet-up details, etc.). */
+    fulfillmentNotes?: string;
     /** Set when status is cancelled (seller-facing explanation for the buyer). */
     cancellationReason?: string;
     /** Populated when the seller confirms (POST status → confirmed with checklist). */

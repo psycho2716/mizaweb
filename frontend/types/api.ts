@@ -35,7 +35,7 @@ export interface AuthLoginResponse {
 }
 
 export interface AuthMeResponse {
-  user: AuthUser | undefined;
+  user: AuthUser | null | undefined;
 }
 
 export interface BuyerProfileUpdateResponse {
@@ -213,6 +213,9 @@ export interface BuyerOrderSummaryItem {
   shippingPostalCode?: string;
   shippingContactNumber?: string;
   deliveryNotes?: string;
+  fulfillmentCarrierName?: string;
+  fulfillmentTrackingNumber?: string;
+  fulfillmentNotes?: string;
   cancellationReason?: string;
   qualityChecklist?: OrderQualityChecklist;
   receiptStatus: Order["receiptStatus"];

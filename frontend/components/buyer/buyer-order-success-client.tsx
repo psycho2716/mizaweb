@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -11,10 +11,21 @@ import {
     Shield,
     Truck
 } from "lucide-react";
+import { toast } from "sonner";
 import { getOrderById, getProductDetail } from "@/lib/api/endpoints";
 import { readCheckoutSuccessMeta } from "@/lib/checkout-success-storage";
+import { openOrderReceiptPrintWindow } from "@/lib/order-receipt-print";
+import { normalizeCartItemSelections } from "@/lib/normalize-cart-item-selections";
 import { formatPeso, getAppName } from "@/lib/utils";
-import type { CartItemSelection, Order, OrderLineItem, ProductDetail } from "@/types";
+import type {
+    CartItemSelection,
+    CheckoutSuccessDisplayMeta,
+    Order,
+    OrderLineItem,
+    OrderReceiptPrintPayload,
+    OrderReceiptShipTo,
+    ProductDetail
+} from "@/types";
 
 const DELIVERY_DATE_OPTS: Intl.DateTimeFormatOptions = {
     month: "short",
@@ -39,7 +50,8 @@ function estimatedDeliveryLabelFromOrder(order: Order | null): string | null {
     return null;
 }
 
-function selectionTags(
+/** Full spec lines for print receipt (sentence case). */
+function selectionLinesForReceipt(
     product: ProductDetail | undefined,
     selections: CartItemSelection[] | undefined
 ): string[] {
@@ -50,14 +62,85 @@ function selectionTags(
     const out: string[] = [];
     for (const s of selections) {
         const o = byId.get(s.optionId);
-        const name = (s.optionLabel?.trim() || o?.name)?.toUpperCase();
+        const name = s.optionLabel?.trim() || o?.name;
         if (name) {
             out.push(`${name}: ${s.value}`);
         } else if (s.value) {
             out.push(s.value);
         }
     }
-    return out.slice(0, 2);
+    return out;
+}
+
+function selectionTags(
+    product: ProductDetail | undefined,
+    selections: CartItemSelection[] | undefined
+): string[] {
+    return selectionLinesForReceipt(product, selections)
+        .slice(0, 2)
+        .map((line) => line.toUpperCase());
+}
+
+function orderStatusLabelForReceipt(status: Order["status"]): string {
+    switch (status) {
+        case "created":
+            return "Placed — awaiting seller confirmation";
+        case "confirmed":
+            return "Confirmed by seller";
+        case "processing":
+            return "Being prepared";
+        case "shipped":
+            return "Shipped / on the way";
+        case "delivered":
+            return "Delivered";
+        case "cancelled":
+            return "Cancelled";
+        default:
+            return status;
+    }
+}
+
+function paymentMethodLabelForReceipt(order: Order): string {
+    if (order.paymentMethod === "cash") {
+        return "Cash (coordinate payment and meet-up with your seller)";
+    }
+    const ref = order.paymentReference?.trim();
+    return ref ? `Online payment · ${ref}` : "Online payment";
+}
+
+function paymentStatusLabelForReceipt(order: Order): string {
+    return order.paymentStatus === "paid" ? "Paid" : "Pending";
+}
+
+function buildReceiptShipTo(meta: CheckoutSuccessDisplayMeta | null, order: Order): OrderReceiptShipTo | null {
+    if (meta) {
+        return {
+            fullName: meta.fullName,
+            email: meta.email,
+            ...(meta.contactNumber ? { contactNumber: meta.contactNumber } : {}),
+            addressLine: meta.addressLine,
+            city: meta.city,
+            postalCode: meta.postalCode,
+            ...(meta.country ? { country: meta.country } : {}),
+            ...(meta.deliveryNotes?.trim() ? { deliveryNotes: meta.deliveryNotes.trim() } : {})
+        };
+    }
+    const name = order.shippingRecipientName?.trim();
+    const addr = order.shippingAddressLine?.trim();
+    if (!name && !addr) {
+        return null;
+    }
+    return {
+        fullName: name || "—",
+        email: "",
+        ...(order.shippingContactNumber?.trim()
+            ? { contactNumber: order.shippingContactNumber.trim() }
+            : {}),
+        addressLine: addr || "—",
+        city: order.shippingCity?.trim() || "—",
+        postalCode: order.shippingPostalCode?.trim() || "—",
+        ...(order.deliveryNotes?.trim() ? { deliveryNotes: order.deliveryNotes.trim() } : {})
+    };
 }
 
 function OrderSuccessFooter() {
@@ -165,6 +248,58 @@ export function BuyerOrderSuccessClient() {
         [totalAmount, itemsSubtotal]
     );
 
+    const shippingReceiptDisplay = useMemo(
+        () => (deliveryPortion > 0 ? formatPeso(deliveryPortion) : "With seller"),
+        [deliveryPortion]
+    );
+
+    const handleSaveOrPrintReceipt = useCallback(() => {
+        if (!order) {
+            return;
+        }
+        const lines = lineItems.map((li) => {
+            const p = productMap[li.productId];
+            const unit = p?.basePrice ?? 0;
+            return {
+                title: p?.title ?? li.productId,
+                quantity: li.quantity,
+                unitPricePeso: unit,
+                lineTotalPeso: unit * li.quantity,
+                optionLines: selectionLinesForReceipt(p, li.selections)
+            };
+        });
+        const payload: OrderReceiptPrintPayload = {
+            appName,
+            orderId,
+            orderPlacedAtIso: order.createdAt,
+            paymentMethodLabel: paymentMethodLabelForReceipt(order),
+            paymentStatusLabel: paymentStatusLabelForReceipt(order),
+            orderStatusLabel: orderStatusLabelForReceipt(order.status),
+            estimatedDelivery: estimatedDeliveryLabel,
+            lines,
+            subtotalPeso: itemsSubtotal,
+            shippingDisplay: shippingReceiptDisplay,
+            totalPeso: totalAmount,
+            shipTo: buildReceiptShipTo(meta, order),
+            footerNote: `Thank you for supporting local stone artisans. Thoughtful buying keeps craft skills alive and helps sellers on ${appName} thrive.`
+        };
+        const opened = openOrderReceiptPrintWindow(payload);
+        if (!opened) {
+            toast.error("Allow pop-ups for this site to open your receipt, then use Print → Save as PDF.");
+        }
+    }, [
+        appName,
+        orderId,
+        order,
+        lineItems,
+        productMap,
+        estimatedDeliveryLabel,
+        itemsSubtotal,
+        shippingReceiptDisplay,
+        totalAmount,
+        meta
+    ]);
+
     useEffect(() => {
         if (!orderId) {
             setLoading(false);
@@ -181,7 +316,12 @@ export function BuyerOrderSuccessClient() {
                     return;
                 }
                 setOrder(res.data.order);
-                setLineItems(res.data.lineItems);
+                setLineItems(
+                    res.data.lineItems.map((li) => ({
+                        ...li,
+                        selections: normalizeCartItemSelections(li.selections)
+                    }))
+                );
                 setTotalAmount(res.data.order.totalAmount);
                 const map: Record<string, ProductDetail> = {};
                 await Promise.all(
@@ -312,7 +452,7 @@ export function BuyerOrderSuccessClient() {
                                     </Link>
                                     <button
                                         type="button"
-                                        onClick={() => window.print()}
+                                        onClick={() => handleSaveOrPrintReceipt()}
                                         className="inline-flex h-12 items-center justify-center border border-white/20 bg-transparent px-8 text-xs font-bold uppercase tracking-[0.14em] text-foreground transition hover:bg-white/5"
                                     >
                                         Save or print receipt

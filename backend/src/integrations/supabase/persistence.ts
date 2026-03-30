@@ -23,6 +23,7 @@ import type {
     VerificationStatus,
     VerificationSubmission
 } from "../../types/domain";
+import { snapshotSelectionsForOrderLine } from "../../lib/cart-selections";
 import { createSupabaseAdminClient, isSupabaseConfigured } from "./client";
 
 const LEGACY_QC_DEFAULTS: { id: string; label: string; legacyKey: string }[] = [
@@ -94,22 +95,51 @@ function parseStoredQualityChecklist(raw: unknown): OrderQualityChecklist | unde
 }
 
 function parseStoredSelections(raw: unknown): CartItemSelection[] {
-    if (!Array.isArray(raw)) {
+    let parsed: unknown = raw;
+    if (typeof raw === "string") {
+        try {
+            parsed = JSON.parse(raw) as unknown;
+        } catch {
+            return [];
+        }
+    }
+    if (!Array.isArray(parsed)) {
         return [];
     }
     const out: CartItemSelection[] = [];
-    for (const x of raw) {
+    for (const x of parsed) {
         if (!x || typeof x !== "object") {
             continue;
         }
-        const r = x as { optionId?: unknown; value?: unknown; optionLabel?: unknown };
-        if (typeof r.optionId === "string" && typeof r.value === "string") {
-            const row: CartItemSelection = { optionId: r.optionId, value: r.value };
-            if (typeof r.optionLabel === "string" && r.optionLabel.trim()) {
-                row.optionLabel = r.optionLabel.trim();
-            }
-            out.push(row);
+        const r = x as Record<string, unknown>;
+        const optionId =
+            typeof r.optionId === "string"
+                ? r.optionId
+                : typeof r.option_id === "string"
+                  ? r.option_id
+                  : null;
+        const valueRaw = r.value;
+        const value =
+            typeof valueRaw === "string"
+                ? valueRaw
+                : valueRaw !== undefined && valueRaw !== null
+                  ? String(valueRaw)
+                  : null;
+        if (!optionId || value === null || value === "") {
+            continue;
         }
+        const labelRaw =
+            typeof r.optionLabel === "string"
+                ? r.optionLabel
+                : typeof r.option_label === "string"
+                  ? r.option_label
+                  : "";
+        const row: CartItemSelection = { optionId, value };
+        const ol = labelRaw.trim();
+        if (ol) {
+            row.optionLabel = ol;
+        }
+        out.push(row);
     }
     return out;
 }
@@ -323,6 +353,9 @@ interface OrderRow {
     shipping_postal_code?: string | null;
     shipping_contact_number?: string | null;
     delivery_notes?: string | null;
+    fulfillment_carrier_name?: string | null;
+    fulfillment_tracking_number?: string | null;
+    fulfillment_notes?: string | null;
     cancellation_reason?: string | null;
     quality_checklist?: unknown | null;
 }
@@ -553,13 +586,14 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
     if (cartRes.data) {
         db.cartItems.clear();
         for (const row of cartRes.data as CartItemRow[]) {
+            const parsedSel = parseStoredSelections(row.selections);
             db.cartItems.set(row.id, {
                 id: row.id,
                 ...(row.buyer_id ? { buyerId: row.buyer_id } : {}),
                 ...(row.guest_session_id ? { guestSessionId: row.guest_session_id } : {}),
                 productId: row.product_id,
                 quantity: row.quantity,
-                selections: parseStoredSelections(row.selections)
+                selections: snapshotSelectionsForOrderLine(row.product_id, parsedSel)
             });
         }
     }
@@ -609,6 +643,15 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                     ? { shippingContactNumber: row.shipping_contact_number }
                     : {}),
                 ...(row.delivery_notes ? { deliveryNotes: row.delivery_notes } : {}),
+                ...(row.fulfillment_carrier_name?.trim()
+                    ? { fulfillmentCarrierName: row.fulfillment_carrier_name.trim() }
+                    : {}),
+                ...(row.fulfillment_tracking_number?.trim()
+                    ? { fulfillmentTrackingNumber: row.fulfillment_tracking_number.trim() }
+                    : {}),
+                ...(row.fulfillment_notes?.trim()
+                    ? { fulfillmentNotes: row.fulfillment_notes.trim() }
+                    : {}),
                 ...(row.cancellation_reason
                     ? { cancellationReason: row.cancellation_reason }
                     : {}),
@@ -1027,11 +1070,14 @@ function isMissingCartSelectionsColumnError(error: { message?: string; code?: st
 }
 
 export async function persistCartItem(row: CartItem): Promise<void> {
+    const raw = Array.isArray(row.selections) ? row.selections : [];
+    row.selections = snapshotSelectionsForOrderLine(row.productId, raw);
+
     const supabase = createSupabaseAdminClient();
     if (!supabase) {
         return;
     }
-    const selections = Array.isArray(row.selections) ? row.selections : [];
+    const selections = row.selections;
     const basePayload = {
         id: row.id,
         buyer_id: row.buyerId ?? null,
@@ -1039,18 +1085,15 @@ export async function persistCartItem(row: CartItem): Promise<void> {
         product_id: row.productId,
         quantity: row.quantity
     };
-    let { error } = await supabase
+    const { error } = await supabase
         .from("app_cart_items")
         .upsert({ ...basePayload, selections }, { onConflict: "id" });
-    if (error && isMissingCartSelectionsColumnError(error)) {
-        console.warn(
-            "[persistCartItem] Retrying without selections (apply migration 0031_cart_and_line_item_selections.sql)"
-        );
-        ({ error } = await supabase.from("app_cart_items").upsert(basePayload, { onConflict: "id" }));
-    }
     if (error) {
         console.error("[persistCartItem]", error.message);
-        throw new Error(`Failed to persist cart item: ${error.message}`);
+        const hint = isMissingCartSelectionsColumnError(error)
+            ? " Apply Supabase migration supabase/migrations/0031_cart_and_line_item_selections.sql (adds jsonb selections to app_cart_items). Retrying without selections was removed because it saved empty choices and sync overwrote the cart."
+            : "";
+        throw new Error(`Failed to persist cart item: ${error.message}.${hint}`);
     }
 }
 
@@ -1099,6 +1142,9 @@ export async function persistOrder(row: OrderRecord): Promise<void> {
             shipping_postal_code: row.shippingPostalCode ?? null,
             shipping_contact_number: row.shippingContactNumber ?? null,
             delivery_notes: row.deliveryNotes ?? null,
+            fulfillment_carrier_name: row.fulfillmentCarrierName?.trim() || null,
+            fulfillment_tracking_number: row.fulfillmentTrackingNumber?.trim() || null,
+            fulfillment_notes: row.fulfillmentNotes?.trim() || null,
             cancellation_reason: row.cancellationReason ?? null,
             quality_checklist: row.qualityChecklist ?? null
         },
@@ -1123,18 +1169,15 @@ export async function persistOrderLineItem(row: OrderLineItemRecord): Promise<vo
         quantity: row.quantity,
         created_at: row.createdAt
     };
-    let { error } = await supabase
+    const { error } = await supabase
         .from("app_order_line_items")
         .upsert({ ...basePayload, selections }, { onConflict: "id" });
-    if (error && isMissingCartSelectionsColumnError(error)) {
-        console.warn(
-            "[persistOrderLineItem] Retrying without selections (apply migration 0031_cart_and_line_item_selections.sql)"
-        );
-        ({ error } = await supabase.from("app_order_line_items").upsert(basePayload, { onConflict: "id" }));
-    }
     if (error) {
         console.error("[persistOrderLineItem]", error.message);
-        throw new Error(`Failed to persist order line item: ${error.message}`);
+        const hint = isMissingCartSelectionsColumnError(error)
+            ? " Apply Supabase migration supabase/migrations/0031_cart_and_line_item_selections.sql (adds jsonb selections to app_order_line_items)."
+            : "";
+        throw new Error(`Failed to persist order line item: ${error.message}.${hint}`);
     }
 }
 

@@ -522,6 +522,20 @@ export function updateOrderPaymentStatus(orderId: string, paymentStatus: "pendin
     });
 }
 
+export function updateOrderFulfillmentShipping(
+    orderId: string,
+    payload: {
+        fulfillmentCarrierName: string;
+        fulfillmentTrackingNumber: string;
+        fulfillmentNotes: string;
+    }
+) {
+    return apiFetch<{ ok: boolean }>(`/orders/${orderId}/fulfillment-shipping`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+    });
+}
+
 export function requestReceiptResubmission(orderId: string, note: string) {
     return apiFetch<{ ok: boolean; receiptStatus: string }>(`/orders/${orderId}/request-receipt`, {
         method: "POST",

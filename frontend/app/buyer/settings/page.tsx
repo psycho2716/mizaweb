@@ -147,9 +147,33 @@ export default function BuyerSettingsPage() {
                             inputId="buyer-profile-photo"
                             onFileSelected={(file) => {
                                 void uploadBuyerProfilePhoto(file)
-                                    .then((url) => {
-                                        setProfileImageUrl(url);
-                                        toast.success("Profile photo uploaded. Save to apply.");
+                                    .then(async (url) => {
+                                        const trimmed = url.trim();
+                                        try {
+                                            const res = await updateBuyerProfile({
+                                                profileImageUrl: trimmed
+                                            });
+                                            setMe(res.data);
+                                            setProfileImageUrl(
+                                                res.data.profileImageUrl ?? trimmed
+                                            );
+                                            try {
+                                                window.localStorage.setItem(
+                                                    "miza_user",
+                                                    JSON.stringify(res.data)
+                                                );
+                                                window.dispatchEvent(new Event("miza-auth-change"));
+                                            } catch {
+                                                /* ignore */
+                                            }
+                                            toast.success("Profile photo updated.");
+                                        } catch (error) {
+                                            toast.error(
+                                                error instanceof Error
+                                                    ? error.message
+                                                    : "Could not save profile photo"
+                                            );
+                                        }
                                     })
                                     .catch((error) => {
                                         toast.error(
@@ -392,6 +416,14 @@ export default function BuyerSettingsPage() {
                                             variant="outline"
                                             className="mt-3 border-red-500/40 text-red-300 hover:bg-red-950/40"
                                             onClick={async () => {
+                                                const ok = await requestConfirm({
+                                                    title: "Delete your buyer account permanently?",
+                                                    description:
+                                                        "This will remove your buyer profile, associated data, and your access. This cannot be undone.",
+                                                    confirmLabel: "Delete account",
+                                                    destructive: true
+                                                });
+                                                if (!ok) return;
                                                 try {
                                                     await deleteBuyerAccount(deletePassword);
                                                     clearClientAuthStorage();
@@ -427,10 +459,6 @@ export default function BuyerSettingsPage() {
                                     <div className="flex justify-between gap-2">
                                         <dt className="text-(--muted)">Shopping</dt>
                                         <dd className="font-semibold text-(--accent)">Active</dd>
-                                    </div>
-                                    <div className="flex justify-between gap-2">
-                                        <dt className="text-(--muted)">Role</dt>
-                                        <dd className="text-foreground">Buyer</dd>
                                     </div>
                                 </dl>
                             </div>

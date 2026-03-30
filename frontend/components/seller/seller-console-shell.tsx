@@ -110,14 +110,6 @@ export function SellerConsoleShell({ children, activeNav, sectionTitle }: Seller
                         );
                     })}
                 </nav>
-                <div className="shrink-0 px-3 pb-3">
-                    <Link
-                        href="/seller/listings"
-                        className="flex h-11 w-full items-center justify-center bg-(--accent) text-xs font-bold uppercase tracking-[0.12em] text-[#030608] transition hover:brightness-110"
-                    >
-                        Add new listing
-                    </Link>
-                </div>
                 <div className="mt-auto shrink-0 border-t border-(--border) p-4">
                     <div className="flex items-center gap-3 rounded-md border border-(--border) bg-(--surface) p-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-(--accent)/20 text-xs font-bold text-(--accent)">

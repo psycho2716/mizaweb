@@ -185,6 +185,24 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [selectedSpecs, setSelectedSpecs] = useState<Record<string, string>>({});
     const [viewer, setViewer] = useState<AuthUser | null>(null);
+
+    const customizationOptionsKey = useMemo(
+        () => product.options.map((o) => `${o.id}:${o.values.join("\u001f")}`).join("|"),
+        [product.options]
+    );
+
+    useEffect(() => {
+        setSelectedSpecs(() => {
+            const next: Record<string, string> = {};
+            for (const o of product.options) {
+                const first = o.values[0];
+                if (first) {
+                    next[o.id] = first;
+                }
+            }
+            return next;
+        });
+    }, [product.id, customizationOptionsKey]); // eslint-disable-line react-hooks/exhaustive-deps -- key encodes `product.options`
     const [reviews, setReviews] = useState<ProductReview[]>([]);
     const [summary, setSummary] = useState<ProductReviewSummary>(
         product.reviewSummary ?? { averageRating: null, reviewCount: 0 }
@@ -348,8 +366,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
         return product.options
             .map((o) => {
                 const picked = selectedSpecs[o.id];
-                const value =
-                    picked && o.values.includes(picked) ? picked : (o.values[0] ?? "");
+                const value = picked && o.values.includes(picked) ? picked : (o.values[0] ?? "");
                 return { optionId: o.id, value };
             })
             .filter((row) => row.value.length > 0);
@@ -720,7 +737,7 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                             </label>
                             <div className="flex flex-col justify-end rounded-lg border border-(--accent)/25 bg-[#050608] px-4 py-3">
                                 <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
-                                    Line total (estimate)
+                                    Total Price
                                 </p>
                                 <p className="mt-1 text-xl font-bold tabular-nums text-(--accent)">
                                     {formatPeso(lineTotal)}

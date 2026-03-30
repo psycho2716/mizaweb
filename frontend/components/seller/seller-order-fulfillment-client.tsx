@@ -14,10 +14,12 @@ import {
     getProductDetail,
     requestReceiptResubmission,
     sendOrderMessage,
+    updateOrderFulfillmentShipping,
     updateOrderPaymentStatus,
     updateOrderStatus
 } from "@/lib/api/endpoints";
 import { formatCartSelectionsLine } from "@/lib/format-cart-selections";
+import { normalizeCartItemSelections } from "@/lib/normalize-cart-item-selections";
 import {
     emptyQualityChecklist,
     isQualityChecklistCompleteForConfirm,
@@ -63,6 +65,33 @@ function canGoTo(
     }
 }
 
+/** First allowed step in the fulfillment chain (used to highlight the real “next” action). */
+function nextFulfillmentAction(
+    order: Order
+): "confirmed" | "processing" | "shipped" | "delivered" | null {
+    if (order.status === "cancelled") {
+        return null;
+    }
+    if (canGoTo(order, "confirmed")) {
+        return "confirmed";
+    }
+    if (canGoTo(order, "processing")) {
+        return "processing";
+    }
+    if (canGoTo(order, "shipped")) {
+        return "shipped";
+    }
+    if (canGoTo(order, "delivered")) {
+        return "delivered";
+    }
+    return null;
+}
+
+const fulfillmentBtnPrimary =
+    "h-10 bg-(--accent) px-4 text-xs font-bold uppercase tracking-wide text-[#030608] hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100";
+const fulfillmentBtnSecondary =
+    "h-10 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:opacity-40";
+
 function openPrintManifest(
     order: Order,
     lineItems: OrderLineItem[],
@@ -93,6 +122,20 @@ function openPrintManifest(
               ]
             : []),
         "",
+        ...(order.fulfillmentCarrierName?.trim()
+            ? [`Carrier: ${order.fulfillmentCarrierName.trim()}`]
+            : []),
+        ...(order.fulfillmentTrackingNumber?.trim()
+            ? [`Tracking: ${order.fulfillmentTrackingNumber.trim()}`]
+            : []),
+        ...(order.fulfillmentNotes?.trim()
+            ? ["Notes:", `  ${order.fulfillmentNotes.trim().replace(/\n/g, "\n  ")}`]
+            : []),
+        ...(order.fulfillmentCarrierName?.trim() ||
+        order.fulfillmentTrackingNumber?.trim() ||
+        order.fulfillmentNotes?.trim()
+            ? [""]
+            : []),
         "Ordered items:"
     ];
     for (const li of lineItems) {
@@ -115,6 +158,9 @@ function openPrintManifest(
 const inputDark =
     "h-10 w-full rounded-md border border-white/15 bg-[#080b10] px-3 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/25";
 
+const textareaDark =
+    "min-h-[104px] w-full rounded-md border border-white/15 bg-[#080b10] px-3 py-2.5 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent)/25";
+
 export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
     const router = useRouter();
     const [order, setOrder] = useState<Order | null>(null);
@@ -136,6 +182,10 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
     const [showReceiptThumb, setShowReceiptThumb] = useState(true);
     const [showReceiptFull, setShowReceiptFull] = useState(true);
     const [qualityDraft, setQualityDraft] = useState(emptyQualityChecklist);
+    const [fulfillmentCarrier, setFulfillmentCarrier] = useState("");
+    const [fulfillmentTracking, setFulfillmentTracking] = useState("");
+    const [fulfillmentNotes, setFulfillmentNotes] = useState("");
+    const [fulfillmentSaving, setFulfillmentSaving] = useState(false);
     const orderIdRef = useRef(orderId);
     orderIdRef.current = orderId;
 
@@ -184,7 +234,12 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
             const res = await getOrderById(orderId);
             const loaded = res.data.order;
             setOrder(loaded);
-            setLineItems(res.data.lineItems);
+            setLineItems(
+                res.data.lineItems.map((li) => ({
+                    ...li,
+                    selections: normalizeCartItemSelections(li.selections)
+                }))
+            );
             setBuyerDisplayName(res.data.buyerDisplayName ?? loaded.buyerId);
             const map: Record<string, ProductDetail> = {};
             const ids = [...new Set(res.data.lineItems.map((l) => l.productId))];
@@ -213,6 +268,15 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
     useEffect(() => {
         void loadOrder();
     }, [loadOrder]);
+
+    useEffect(() => {
+        if (!order) {
+            return;
+        }
+        setFulfillmentCarrier(order.fulfillmentCarrierName ?? "");
+        setFulfillmentTracking(order.fulfillmentTrackingNumber ?? "");
+        setFulfillmentNotes(order.fulfillmentNotes ?? "");
+    }, [order]);
 
     useEffect(() => {
         if (!orderId.trim()) {
@@ -288,6 +352,10 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
 
     const firstLine = lineItems[0];
     const primaryProduct = firstLine ? productMap[firstLine.productId] : undefined;
+    const mainItemSelectionsText = useMemo(
+        () => formatCartSelectionsLine(primaryProduct, firstLine?.selections),
+        [primaryProduct, firstLine]
+    );
     const thumb = primaryProduct?.thumbnailUrl?.trim() || primaryProduct?.media[0]?.url || null;
     const sizeLine = useMemo(() => {
         if (!primaryProduct) {
@@ -323,6 +391,26 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
         }
     }
 
+    async function handleSaveFulfillmentShipping() {
+        if (!order || order.status === "cancelled") {
+            return;
+        }
+        setFulfillmentSaving(true);
+        try {
+            await updateOrderFulfillmentShipping(order.id, {
+                fulfillmentCarrierName: fulfillmentCarrier,
+                fulfillmentTrackingNumber: fulfillmentTracking,
+                fulfillmentNotes: fulfillmentNotes
+            });
+            await loadOrder();
+            toast.success("Shipping details saved. The buyer can see them on their order.");
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Could not save shipping details.");
+        } finally {
+            setFulfillmentSaving(false);
+        }
+    }
+
     async function handlePaid() {
         if (!order) {
             return;
@@ -343,6 +431,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
         if (!order) {
             return;
         }
+        if (order.paymentStatus === "paid" || order.receiptStatus === "approved") {
+            return;
+        }
         const note = receiptNote.trim();
         if (note.length < 5) {
             toast.error("Please enter at least 5 characters in the note to the buyer.");
@@ -353,7 +444,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
             await requestReceiptResubmission(order.id, note);
             setReceiptNote("");
             await loadOrder();
-            toast.success("Request sent to the buyer. They can upload a new receipt from My Orders.");
+            toast.success(
+                "Request sent to the buyer. They can upload a new receipt from My Orders."
+            );
         } catch (e) {
             toast.error(e instanceof Error ? e.message : "Request failed.");
         } finally {
@@ -440,6 +533,11 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
     const qualityChecklistInteractive = order.status === "created" && !isCancelled;
     const savedQuality = order.qualityChecklist;
     const allQualityChecked = isQualityChecklistCompleteForConfirm(qualityDraft);
+    const nextAction = nextFulfillmentAction(order);
+    const confirmBlockedByChecklist =
+        order.status === "created" && !isCancelled && !allQualityChecked;
+    const receiptResendLocked =
+        order.paymentStatus === "paid" || order.receiptStatus === "approved";
 
     return (
         <div className="bg-[#050508]/40 p-4 md:p-6 lg:p-8">
@@ -507,7 +605,8 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                         <p className="mt-2 text-sm text-(--muted)">No reason was stored.</p>
                     )}
                     <p className="mt-3 text-xs text-(--muted)">
-                        Fulfillment actions are disabled. The buyer was notified in the order thread.
+                        Fulfillment actions are disabled. The buyer was notified in the order
+                        thread.
                     </p>
                 </div>
             ) : (
@@ -585,18 +684,34 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                             <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
                                 Size &amp; measurements
                             </p>
-                            
+
                             {firstLine ? (
-                                <p className="mt-2 text-xs text-(--muted)">
-                                    {formatCartSelectionsLine(
-                                        primaryProduct,
-                                        firstLine.selections
-                                    ) ?? "Selections from checkout appear here when available."}
-                                </p>
+                                <div className="mt-2 space-y-2 text-xs text-(--muted)">
+                                    {mainItemSelectionsText ? (
+                                        <p className="text-foreground">{mainItemSelectionsText}</p>
+                                    ) : null}
+                                    {!mainItemSelectionsText && primaryProduct?.options?.length ? (
+                                        <>
+                                            {sizeLine ? <p>{sizeLine}</p> : null}
+                                            <p>
+                                                The buyer&apos;s exact option choice was not stored
+                                                on this order line (for example, the order may
+                                                predate saved checkout selections). Confirm with the
+                                                buyer if needed.
+                                            </p>
+                                        </>
+                                    ) : null}
+                                    {!mainItemSelectionsText && !primaryProduct?.options?.length ? (
+                                        <p>Selections from checkout appear here when available.</p>
+                                    ) : null}
+                                </div>
                             ) : null}
                         </div>
 
-                        <div className="border border-white/10 bg-[#0e131c] p-5">
+                        <div
+                            id="seller-order-quality-checklist"
+                            className="border border-white/10 bg-[#0e131c] p-5"
+                        >
                             <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
                                 Quality checklist
                             </p>
@@ -646,7 +761,10 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                                         }
                                                         maxLength={500}
                                                         placeholder="What to verify before you ship…"
-                                                        className={cn(inputDark, "min-h-11 flex-1 py-2")}
+                                                        className={cn(
+                                                            inputDark,
+                                                            "min-h-11 flex-1 py-2"
+                                                        )}
                                                         aria-label="Checklist line text"
                                                     />
                                                 </label>
@@ -656,7 +774,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                                     onClick={() =>
                                                         setQualityDraft((d) => ({
                                                             ...d,
-                                                            items: d.items.filter((it) => it.id !== row.id)
+                                                            items: d.items.filter(
+                                                                (it) => it.id !== row.id
+                                                            )
                                                         }))
                                                     }
                                                     className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 border border-white/15 px-3 text-[10px] font-bold uppercase tracking-wide text-(--muted) hover:border-red-500/40 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-30"
@@ -699,9 +819,7 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                                 aria-hidden
                                             />
                                             <span
-                                                className={
-                                                    row.checked ? "" : "text-foreground/45"
-                                                }
+                                                className={row.checked ? "" : "text-foreground/45"}
                                             >
                                                 {row.label}
                                             </span>
@@ -728,69 +846,173 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                         <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
                             Shipping details
                         </p>
-                        <p className="mt-3 text-sm leading-relaxed text-(--muted)">
-                            Share the carrier name and{" "}
-                            <strong className="text-foreground">tracking ID</strong> with your buyer
-                            in messages when you mark the order shipped. If you use cash meet-up,
-                            say where and when you plan to meet.
+                        <p className="mt-2 text-xs leading-relaxed text-(--muted)">
+                            Optional — add courier, tracking, or meet-up notes here. When you save,
+                            the buyer sees this on{" "}
+                            <strong className="text-foreground/90">My orders</strong>. Leave blank
+                            if you prefer to coordinate only in messages.
                         </p>
+                        <div className="mt-4 space-y-4">
+                            <label className="block">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                    Courier / carrier name
+                                </span>
+                                <input
+                                    type="text"
+                                    value={fulfillmentCarrier}
+                                    onChange={(e) => setFulfillmentCarrier(e.target.value)}
+                                    disabled={order.status === "cancelled"}
+                                    placeholder="e.g. J&T, LBC, Grab Express"
+                                    className={cn("mt-1.5", inputDark)}
+                                    autoComplete="off"
+                                />
+                            </label>
+                            <label className="block">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                    Tracking number
+                                </span>
+                                <input
+                                    type="text"
+                                    value={fulfillmentTracking}
+                                    onChange={(e) => setFulfillmentTracking(e.target.value)}
+                                    disabled={order.status === "cancelled"}
+                                    placeholder="Tracking or reference ID"
+                                    className={cn("mt-1.5 font-mono text-sm", inputDark)}
+                                    autoComplete="off"
+                                />
+                            </label>
+                            <label className="block">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                    Other details
+                                </span>
+                                <textarea
+                                    value={fulfillmentNotes}
+                                    onChange={(e) => setFulfillmentNotes(e.target.value)}
+                                    disabled={order.status === "cancelled"}
+                                    placeholder="Meet-up location & time, handling notes, expected arrival, etc."
+                                    rows={4}
+                                    className={cn("mt-1.5 resize-y", textareaDark)}
+                                />
+                            </label>
+                            {order.status === "cancelled" ? (
+                                <p className="text-xs text-(--muted)">
+                                    This order is cancelled — shipping details cannot be edited.
+                                </p>
+                            ) : (
+                                <button
+                                    type="button"
+                                    disabled={fulfillmentSaving}
+                                    onClick={() => void handleSaveFulfillmentShipping()}
+                                    className={cn(
+                                        fulfillmentBtnSecondary,
+                                        "disabled:cursor-not-allowed disabled:opacity-40"
+                                    )}
+                                >
+                                    {fulfillmentSaving ? "Saving…" : "Save shipping details"}
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     {!isCancelled ? (
-                        <div className="flex flex-wrap gap-2 border-t border-white/10 pt-6">
-                            <button
-                                type="button"
-                                disabled={
-                                    !canGoTo(order, "confirmed") ||
-                                    (order.status === "created" && !allQualityChecked)
-                                }
-                                onClick={() => void handleStatus("confirmed")}
-                                className="h-10 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:opacity-40"
-                            >
-                                Confirm order
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!canGoTo(order, "processing")}
-                                onClick={() => void handleStatus("processing")}
-                                className="h-10 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:opacity-40"
-                            >
-                                Start packing
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!canGoTo(order, "shipped")}
-                                onClick={() => void handleStatus("shipped")}
-                                className="h-10 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:opacity-40"
-                            >
-                                Mark shipped
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!canGoTo(order, "delivered")}
-                                onClick={() => void handleStatus("delivered")}
-                                className="h-10 bg-(--accent) px-4 text-xs font-bold uppercase tracking-wide text-[#030608] hover:brightness-110 disabled:opacity-40"
-                            >
-                                Mark delivered
-                            </button>
-                            {order.paymentMethod === "cash" ? (
+                        <div className="border-t border-white/10 pt-6">
+                            {confirmBlockedByChecklist ? (
+                                <p
+                                    className="mb-3 rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-sm text-amber-100/95"
+                                    role="status"
+                                >
+                                    <strong className="font-semibold text-amber-50">
+                                        Almost there.
+                                    </strong>{" "}
+                                    Tick every box in the{" "}
+                                    <a
+                                        href="#seller-order-quality-checklist"
+                                        className="font-semibold text-(--accent) underline-offset-2 hover:underline"
+                                    >
+                                        quality checklist
+                                    </a>{" "}
+                                    (including any lines you added). Each line must keep some text
+                                    and be checked—then you can confirm the order.
+                                </p>
+                            ) : null}
+                            <div className="flex flex-wrap gap-2">
                                 <button
                                     type="button"
-                                    disabled={order.paymentStatus === "paid" || paymentProofBusy}
-                                    onClick={() => void handlePaid()}
-                                    className="h-10 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:opacity-40"
+                                    disabled={
+                                        !canGoTo(order, "confirmed") ||
+                                        (order.status === "created" && !allQualityChecked)
+                                    }
+                                    title={
+                                        confirmBlockedByChecklist
+                                            ? "Complete every quality checklist item first"
+                                            : undefined
+                                    }
+                                    onClick={() => void handleStatus("confirmed")}
+                                    className={cn(
+                                        nextAction === "confirmed"
+                                            ? fulfillmentBtnPrimary
+                                            : fulfillmentBtnSecondary
+                                    )}
                                 >
-                                    Mark paid
+                                    Confirm order
                                 </button>
-                            ) : null}
-                            <button
-                                type="button"
-                                onClick={() => setCancelModalOpen(true)}
-                                className="inline-flex h-10 items-center gap-2 border border-red-500/45 px-4 text-xs font-bold uppercase tracking-wide text-red-200 hover:bg-red-500/10"
-                            >
-                                <CircleX className="h-4 w-4 shrink-0" aria-hidden />
-                                Cancel / decline order
-                            </button>
+                                <button
+                                    type="button"
+                                    disabled={!canGoTo(order, "processing")}
+                                    onClick={() => void handleStatus("processing")}
+                                    className={cn(
+                                        nextAction === "processing"
+                                            ? fulfillmentBtnPrimary
+                                            : fulfillmentBtnSecondary
+                                    )}
+                                >
+                                    Mark as Packed
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={!canGoTo(order, "shipped")}
+                                    onClick={() => void handleStatus("shipped")}
+                                    className={cn(
+                                        nextAction === "shipped"
+                                            ? fulfillmentBtnPrimary
+                                            : fulfillmentBtnSecondary
+                                    )}
+                                >
+                                    Mark as shipped
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={!canGoTo(order, "delivered")}
+                                    onClick={() => void handleStatus("delivered")}
+                                    className={cn(
+                                        nextAction === "delivered"
+                                            ? fulfillmentBtnPrimary
+                                            : fulfillmentBtnSecondary
+                                    )}
+                                >
+                                    Mark delivered
+                                </button>
+                                {order.paymentMethod === "cash" ? (
+                                    <button
+                                        type="button"
+                                        disabled={
+                                            order.paymentStatus === "paid" || paymentProofBusy
+                                        }
+                                        onClick={() => void handlePaid()}
+                                        className={fulfillmentBtnSecondary}
+                                    >
+                                        Mark as paid
+                                    </button>
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => setCancelModalOpen(true)}
+                                    className="inline-flex h-10 items-center gap-2 border border-red-500/45 px-4 text-xs font-bold uppercase tracking-wide text-red-200 hover:bg-red-500/10"
+                                >
+                                    <CircleX className="h-4 w-4 shrink-0" aria-hidden />
+                                    Cancel / decline order
+                                </button>
+                            </div>
                         </div>
                     ) : null}
 
@@ -817,7 +1039,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                         Loading receipt…
                                     </div>
                                 ) : receiptReadError ? (
-                                    <p className="mt-2 text-sm text-amber-300/90">{receiptReadError}</p>
+                                    <p className="mt-2 text-sm text-amber-300/90">
+                                        {receiptReadError}
+                                    </p>
                                 ) : receiptReadUrl ? (
                                     <div className="mt-3 space-y-3">
                                         <a
@@ -857,6 +1081,13 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                     {formatSellerEnumLabel(order.receiptStatus)}
                                 </span>
                             </p>
+                            {receiptResendLocked ? (
+                                <p className="mt-2 text-xs text-(--muted)">
+                                    {order.paymentStatus === "paid"
+                                        ? "Payment is confirmed — you cannot ask the buyer to resend proof."
+                                        : "This receipt is approved — resend requests are not available."}
+                                </p>
+                            ) : null}
                             <div className="mt-3 flex flex-col gap-3">
                                 <input
                                     className={cn(inputDark, "w-full")}
@@ -864,6 +1095,7 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                     onChange={(e) => setReceiptNote(e.target.value)}
                                     placeholder="Note to buyer if they should resend proof (at least 5 characters)…"
                                     maxLength={500}
+                                    disabled={receiptResendLocked || paymentProofBusy}
                                 />
                                 <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                     {order.paymentStatus !== "paid" ? (
@@ -879,7 +1111,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                     <button
                                         type="button"
                                         disabled={
-                                            receiptNote.trim().length < 5 || paymentProofBusy
+                                            receiptResendLocked ||
+                                            receiptNote.trim().length < 5 ||
+                                            paymentProofBusy
                                         }
                                         onClick={() => void handleReceiptRequest()}
                                         className="h-10 shrink-0 border border-white/15 px-4 text-xs font-bold uppercase tracking-wide hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
@@ -950,7 +1184,9 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                                     Buyer payment receipt
                                 </p>
                                 {receiptReadError ? (
-                                    <p className="mt-2 text-xs text-amber-300/90">{receiptReadError}</p>
+                                    <p className="mt-2 text-xs text-amber-300/90">
+                                        {receiptReadError}
+                                    </p>
                                 ) : !receiptReadUrl ? (
                                     <p className="mt-2 text-xs text-(--muted)">Loading receipt…</p>
                                 ) : (
@@ -1094,9 +1330,7 @@ export function SellerOrderFulfillmentClient({ orderId }: { orderId: string }) {
                             </button>
                             <button
                                 type="button"
-                                disabled={
-                                    cancelSubmitting || cancelReason.trim().length < 10
-                                }
+                                disabled={cancelSubmitting || cancelReason.trim().length < 10}
                                 onClick={() => void handleConfirmCancelOrder()}
                                 className="h-10 bg-red-600/90 px-4 text-xs font-bold uppercase tracking-wide text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-40"
                             >

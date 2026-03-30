@@ -12,6 +12,10 @@ import { authorizeRole } from "./middleware/authorize-role";
 import { authenticate, resolveOptionalAuthUserId } from "./middleware/authenticate";
 import { parseAndValidateCartSelections, snapshotSelectionsForOrderLine } from "./lib/cart-selections";
 import {
+    deductStockForOrderAndPersist,
+    restoreStockForOrderAndPersist
+} from "./lib/order-inventory";
+import {
     cartSelectionsEqual,
     maxPurchasableUnits,
     ownerCartItems,
@@ -96,8 +100,10 @@ import {
 } from "./modules/verification/verification-storage";
 import type {
     AuthUser,
+    CartItem,
     ConversationRecord,
     OrderLineItemRecord,
+    OrderQualityChecklist,
     ProductRecord,
     SellerLocationChangeRequest,
     SellerPaymentMethod,
@@ -105,6 +111,18 @@ import type {
 } from "./types/domain";
 
 const app = express();
+
+/** Signed read URL for buyer avatars in private verification-docs storage; external URLs unchanged. */
+async function withResolvedAuthUserProfileImage(user: AuthUser): Promise<AuthUser> {
+    if (!user.profileImageUrl) {
+        return user;
+    }
+    const resolved = await resolveVerificationDocsReadUrl(user.profileImageUrl);
+    if (!resolved) {
+        return user;
+    }
+    return { ...user, profileImageUrl: resolved };
+}
 
 async function withResolvedSellerProfileMedia(profile: SellerProfile): Promise<SellerProfile> {
     const [resolvedPic, resolvedBg] = await Promise.all([
@@ -365,6 +383,12 @@ function getGuestSessionId(request: express.Request): string | null {
     return sessionId && sessionId.trim().length > 0 ? sessionId.trim() : null;
 }
 
+/** Attach option labels from the catalog so cart API responses stay readable after sync. */
+function enrichCartLineSelections(entry: CartItem): void {
+    const raw = Array.isArray(entry.selections) ? entry.selections : [];
+    entry.selections = snapshotSelectionsForOrderLine(entry.productId, raw);
+}
+
 /** Moves guest-session lines onto the buyer so logged-in shoppers see pre-login cart items. */
 async function mergeGuestCartIntoBuyer(
     buyerId: string,
@@ -582,7 +606,7 @@ app.post("/auth/register", authLimiter, async (request, response) => {
         response.status(201).json({
             token: sessionData.session.access_token,
             refreshToken: sessionData.session.refresh_token,
-            user
+            user: await withResolvedAuthUserProfileImage(user)
         });
         return;
     }
@@ -635,7 +659,10 @@ app.post("/auth/register", authLimiter, async (request, response) => {
         expiresIn: "2h"
     });
 
-    response.status(201).json({ token, user });
+    response.status(201).json({
+        token,
+        user: await withResolvedAuthUserProfileImage(user)
+    });
 });
 
 app.post("/auth/login", authLimiter, async (request, response) => {
@@ -689,7 +716,7 @@ app.post("/auth/login", authLimiter, async (request, response) => {
         response.json({
             token: data.session.access_token,
             refreshToken: data.session.refresh_token,
-            user
+            user: await withResolvedAuthUserProfileImage(user)
         });
         return;
     }
@@ -713,7 +740,10 @@ app.post("/auth/login", authLimiter, async (request, response) => {
     const token = jwt.sign({ sub: user.id, role: user.role }, env.JWT_SECRET, {
         expiresIn: "2h"
     });
-    response.json({ token, user });
+    response.json({
+        token,
+        user: await withResolvedAuthUserProfileImage(user)
+    });
 });
 
 app.post("/auth/refresh", authLimiter, async (request, response) => {
@@ -758,7 +788,7 @@ app.post("/auth/refresh", authLimiter, async (request, response) => {
     response.json({
         token: data.session.access_token,
         refreshToken: data.session.refresh_token,
-        user
+        user: await withResolvedAuthUserProfileImage(user)
     });
 });
 
@@ -766,8 +796,13 @@ app.post("/auth/logout", authenticate, (_request, response) => {
     response.json({ ok: true });
 });
 
-app.get("/auth/me", authenticate, (request, response) => {
-    response.json({ user: db.users.get(request.authUserId as string) });
+app.get("/auth/me", authenticate, async (request, response) => {
+    const user = db.users.get(request.authUserId as string);
+    if (!user) {
+        response.json({ user: null });
+        return;
+    }
+    response.json({ user: await withResolvedAuthUserProfileImage(user) });
 });
 
 app.get("/sellers/:id/profile", async (request, response) => {
@@ -1383,7 +1418,9 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
         buyer.fullName = parsed.data.fullName;
     }
     if (parsed.data.profileImageUrl !== undefined) {
-        buyer.profileImageUrl = parsed.data.profileImageUrl;
+        buyer.profileImageUrl =
+            normalizeVerificationDocsStoredUrl(parsed.data.profileImageUrl) ??
+            parsed.data.profileImageUrl;
     }
     if (parsed.data.contactNumber !== undefined) {
         const digits = parsed.data.contactNumber.replace(/\D/g, "");
@@ -1515,7 +1552,10 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
         });
         return;
     }
-    response.json({ ok: true, data: buyer });
+    response.json({
+        ok: true,
+        data: await withResolvedAuthUserProfileImage(buyer)
+    });
 });
 
 app.post(
@@ -2752,6 +2792,9 @@ app.get("/cart", async (request, response) => {
             return;
         }
         const items = [...db.cartItems.values()].filter((entry) => entry.buyerId === authUserId);
+        for (const entry of items) {
+            enrichCartLineSelections(entry);
+        }
         response.json({ data: items });
         return;
     }
@@ -2764,6 +2807,9 @@ app.get("/cart", async (request, response) => {
     const items = [...db.cartItems.values()].filter(
         (entry) => entry.guestSessionId === guestSessionId
     );
+    for (const entry of items) {
+        enrichCartLineSelections(entry);
+    }
     response.json({ data: items });
 });
 
@@ -2921,6 +2967,7 @@ app.patch("/cart/items/:itemId", async (request, response) => {
         response.status(500).json({ error: "Could not update cart" });
         return;
     }
+    enrichCartLineSelections(cartItem);
     response.json({ ok: true, data: cartItem });
 });
 
@@ -3184,17 +3231,6 @@ app.post(
             createdOrders.push({ id, sellerId, totalAmount });
         }
 
-        for (const [productId, qty] of qtyByProduct) {
-            const p = db.products.get(productId);
-            if (!p || p.madeToOrder) {
-                continue;
-            }
-            const nextStock = (p.stockQuantity ?? 0) - qty;
-            const updated = { ...p, stockQuantity: nextStock };
-            db.products.set(productId, updated);
-            await persistProduct(updated);
-        }
-
         for (const entry of items) {
             db.cartItems.delete(entry.id);
             try {
@@ -3394,9 +3430,15 @@ app.post(
         }
         const previousStatus = order.status;
         const previousCancellationReason = order.cancellationReason;
-        order.status = "cancelled";
-        order.cancellationReason = parsed.data.reason;
+        const shouldRestoreStock = previousStatus !== "created";
+        let stockRestoredForCancel = false;
         try {
+            if (shouldRestoreStock) {
+                await restoreStockForOrderAndPersist(orderId);
+                stockRestoredForCancel = true;
+            }
+            order.status = "cancelled";
+            order.cancellationReason = parsed.data.reason;
             await persistOrder(order);
         } catch (error) {
             order.status = previousStatus;
@@ -3404,6 +3446,16 @@ app.post(
                 order.cancellationReason = previousCancellationReason;
             } else {
                 delete order.cancellationReason;
+            }
+            if (stockRestoredForCancel) {
+                try {
+                    await deductStockForOrderAndPersist(orderId);
+                } catch (reDeductErr) {
+                    console.error(
+                        "[POST /orders/:id/cancel-by-seller] re-deduct after failed cancel persist",
+                        reDeductErr
+                    );
+                }
             }
             console.error("[POST /orders/:id/cancel-by-seller]", error);
             response.status(500).json({
@@ -3470,9 +3522,15 @@ app.post(
         }
         const previousStatus = order.status;
         const previousCancellationReason = order.cancellationReason;
-        order.status = "cancelled";
-        order.cancellationReason = parsed.data.reason;
+        const shouldRestoreStock = previousStatus !== "created";
+        let stockRestoredForCancel = false;
         try {
+            if (shouldRestoreStock) {
+                await restoreStockForOrderAndPersist(orderId);
+                stockRestoredForCancel = true;
+            }
+            order.status = "cancelled";
+            order.cancellationReason = parsed.data.reason;
             await persistOrder(order);
         } catch (error) {
             order.status = previousStatus;
@@ -3480,6 +3538,16 @@ app.post(
                 order.cancellationReason = previousCancellationReason;
             } else {
                 delete order.cancellationReason;
+            }
+            if (stockRestoredForCancel) {
+                try {
+                    await deductStockForOrderAndPersist(orderId);
+                } catch (reDeductErr) {
+                    console.error(
+                        "[POST /orders/:id/cancel-by-buyer] re-deduct after failed cancel persist",
+                        reDeductErr
+                    );
+                }
             }
             console.error("[POST /orders/:id/cancel-by-buyer]", error);
             response.status(500).json({
@@ -3737,7 +3805,11 @@ app.post(
             response.status(400).json({ error: "Invalid status transition" });
             return;
         }
-        if (order.status === "created" && parsed.data.status === "confirmed") {
+        const wasConfirmFromCreated =
+            order.status === "created" && parsed.data.status === "confirmed";
+
+        let qcForConfirm: OrderQualityChecklist | undefined;
+        if (wasConfirmFromCreated) {
             const qc = parsed.data.qualityChecklist;
             if (!qc) {
                 response.status(400).json({
@@ -3751,12 +3823,41 @@ app.post(
                 });
                 return;
             }
-            order.qualityChecklist = qc;
+            qcForConfirm = qc;
         }
-        order.status = parsed.data.status;
+
+        const previousOrderStatus = order.status;
+        let stockDeductedForConfirm = false;
         try {
+            if (wasConfirmFromCreated) {
+                await deductStockForOrderAndPersist(orderId);
+                stockDeductedForConfirm = true;
+                order.qualityChecklist = qcForConfirm as OrderQualityChecklist;
+            }
+            order.status = parsed.data.status;
             await persistOrder(order);
         } catch (error) {
+            if (wasConfirmFromCreated && stockDeductedForConfirm) {
+                try {
+                    await restoreStockForOrderAndPersist(orderId);
+                } catch (restoreErr) {
+                    console.error(
+                        "[POST /orders/:id/status] restore stock after failed confirm persist",
+                        restoreErr
+                    );
+                }
+                delete order.qualityChecklist;
+                order.status = previousOrderStatus;
+            }
+            if (
+                error instanceof Error &&
+                wasConfirmFromCreated &&
+                !stockDeductedForConfirm &&
+                error.message.toLowerCase().includes("insufficient stock")
+            ) {
+                response.status(400).json({ error: error.message });
+                return;
+            }
             console.error("[POST /orders/:id/status] persistOrder", error);
             response.status(500).json({ error: "Could not save order" });
             return;
@@ -3816,6 +3917,77 @@ app.post(
     }
 );
 
+app.patch(
+    "/orders/:id/fulfillment-shipping",
+    authenticate,
+    authorizeRole(["seller", "admin"]),
+    async (request, response): Promise<void> => {
+        const schema = z.object({
+            fulfillmentCarrierName: z.string().max(160).optional(),
+            fulfillmentTrackingNumber: z.string().max(240).optional(),
+            fulfillmentNotes: z.string().max(4000).optional()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        if (Object.keys(parsed.data).length === 0) {
+            response.status(400).json({ error: "Send at least one field to update." });
+            return;
+        }
+        const orderId = z.string().min(1).parse(request.params.id);
+        const order = db.orders.get(orderId);
+        if (!order) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        const actor = db.users.get(request.authUserId as string);
+        if (actor?.role === "seller" && order.sellerId !== actor.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.status === "cancelled") {
+            response.status(400).json({ error: "Cannot update shipping details on a cancelled order." });
+            return;
+        }
+        const d = parsed.data;
+        if (d.fulfillmentCarrierName !== undefined) {
+            const t = d.fulfillmentCarrierName.trim();
+            if (t.length > 0) {
+                order.fulfillmentCarrierName = t;
+            } else {
+                delete order.fulfillmentCarrierName;
+            }
+        }
+        if (d.fulfillmentTrackingNumber !== undefined) {
+            const t = d.fulfillmentTrackingNumber.trim();
+            if (t.length > 0) {
+                order.fulfillmentTrackingNumber = t;
+            } else {
+                delete order.fulfillmentTrackingNumber;
+            }
+        }
+        if (d.fulfillmentNotes !== undefined) {
+            const t = d.fulfillmentNotes.trim();
+            if (t.length > 0) {
+                order.fulfillmentNotes = t;
+            } else {
+                delete order.fulfillmentNotes;
+            }
+        }
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            console.error("[PATCH /orders/:id/fulfillment-shipping] persistOrder", error);
+            response.status(500).json({ error: "Could not save shipping details" });
+            return;
+        }
+        emitOrderUpdated(order);
+        response.json({ ok: true });
+    }
+);
+
 app.post(
     "/orders/:id/request-receipt",
     authenticate,
@@ -3846,6 +4018,18 @@ app.post(
         }
         if (order.status === "cancelled") {
             response.status(400).json({ error: "Cannot request receipt on a cancelled order." });
+            return;
+        }
+        if (order.paymentStatus === "paid") {
+            response.status(400).json({
+                error: "Payment is already confirmed. You cannot ask the buyer to resend proof."
+            });
+            return;
+        }
+        if (order.receiptStatus === "approved") {
+            response.status(400).json({
+                error: "This receipt is already approved. Resend requests are not available."
+            });
             return;
         }
         order.paymentStatus = "pending";

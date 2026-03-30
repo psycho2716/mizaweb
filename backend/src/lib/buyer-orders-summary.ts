@@ -43,6 +43,9 @@ export interface BuyerOrderSummaryRow {
     shippingPostalCode?: string;
     shippingContactNumber?: string;
     deliveryNotes?: string;
+    fulfillmentCarrierName?: string;
+    fulfillmentTrackingNumber?: string;
+    fulfillmentNotes?: string;
     cancellationReason?: string;
     qualityChecklist?: OrderQualityChecklist;
     receiptStatus: OrderRecord["receiptStatus"];
@@ -104,6 +107,13 @@ export function buildBuyerOrdersSummary(buyerId: string): BuyerOrderSummaryRow[]
                 ? { shippingContactNumber: order.shippingContactNumber }
                 : {}),
             ...(order.deliveryNotes ? { deliveryNotes: order.deliveryNotes } : {}),
+            ...(order.fulfillmentCarrierName?.trim()
+                ? { fulfillmentCarrierName: order.fulfillmentCarrierName.trim() }
+                : {}),
+            ...(order.fulfillmentTrackingNumber?.trim()
+                ? { fulfillmentTrackingNumber: order.fulfillmentTrackingNumber.trim() }
+                : {}),
+            ...(order.fulfillmentNotes?.trim() ? { fulfillmentNotes: order.fulfillmentNotes.trim() } : {}),
             ...(order.cancellationReason ? { cancellationReason: order.cancellationReason } : {}),
             ...(order.qualityChecklist ? { qualityChecklist: order.qualityChecklist } : {}),
             receiptStatus: order.receiptStatus,

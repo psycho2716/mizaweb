@@ -6,6 +6,7 @@ import { ArrowRight, ClipboardList, Pencil, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { deleteBuyerReview, getBuyerReviews } from "@/lib/api/endpoints";
 import { cn, getAppName } from "@/lib/utils";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import type {
     BuyerReviewPendingItem,
     BuyerReviewSubmittedItem,
@@ -47,6 +48,32 @@ function reviewHeadline(body: string): string | null {
     return `${line.slice(0, 93)}…`;
 }
 
+function SubmittedReviewBody({ body }: { body: string }) {
+    const bodyTrim = body.trim();
+    const headline = reviewHeadline(body);
+    const showExcerpt = Boolean(headline) && headline !== bodyTrim;
+    if (!bodyTrim) {
+        return (
+            <p className="mt-3 text-sm italic text-(--muted)">Star rating only</p>
+        );
+    }
+    return (
+        <>
+            {showExcerpt ? (
+                <p className="mt-3 text-sm font-semibold text-foreground">{headline}</p>
+            ) : null}
+            <p
+                className={cn(
+                    "text-sm leading-relaxed",
+                    showExcerpt ? "mt-2 text-(--muted)" : "mt-3 font-medium text-foreground"
+                )}
+            >
+                {bodyTrim}
+            </p>
+        </>
+    );
+}
+
 function StarRow({ value }: { value: number }) {
     return (
         <div className="flex gap-0.5" role="img" aria-label={`${value} out of 5 stars`}>
@@ -76,6 +103,7 @@ function tabClass(active: boolean) {
 export function BuyerReviewsClient() {
     const appName = getAppName();
     const autoTabRef = useRef(false);
+    const { requestConfirm, dialog: confirmDialog } = useConfirmDialog();
     const [loading, setLoading] = useState(true);
     const [data, setData] = useState<BuyerReviewsDashboardData | null>(null);
     const [tab, setTab] = useState<TabKey>("posted");
@@ -112,9 +140,13 @@ export function BuyerReviewsClient() {
 
     const handleDelete = useCallback(
         async (item: BuyerReviewSubmittedItem) => {
-            const ok = window.confirm(
-                "Remove this review? You can write a new one later if the product is still eligible."
-            );
+            const ok = await requestConfirm({
+                title: "Remove this review?",
+                description:
+                    "You can write a new one later if the product is still eligible.",
+                confirmLabel: "Remove review",
+                destructive: true
+            });
             if (!ok) {
                 return;
             }
@@ -129,7 +161,7 @@ export function BuyerReviewsClient() {
                 setDeletingId(null);
             }
         },
-        [load]
+        [load, requestConfirm]
     );
 
     const pendingPreview = useMemo(() => data?.pending.slice(0, 4) ?? [], [data]);
@@ -218,20 +250,7 @@ export function BuyerReviewsClient() {
                                                             Verified purchase
                                                         </span>
                                                     </div>
-                                                    {reviewHeadline(item.body) ? (
-                                                        <p className="mt-3 text-sm font-semibold text-foreground">
-                                                            {reviewHeadline(item.body)}
-                                                        </p>
-                                                    ) : null}
-                                                    {item.body.trim() ? (
-                                                        <p className="mt-2 text-sm leading-relaxed text-(--muted)">
-                                                            {item.body.trim()}
-                                                        </p>
-                                                    ) : (
-                                                        <p className="mt-2 text-sm italic text-(--muted)">
-                                                            Star rating only
-                                                        </p>
-                                                    )}
+                                                    <SubmittedReviewBody body={item.body} />
                                                     <div className="mt-4 flex flex-wrap gap-4">
                                                         <Link
                                                             href={`/products/${item.productId}#client-verifications`}
@@ -446,6 +465,7 @@ export function BuyerReviewsClient() {
                     </div>
                 </div>
             </footer>
+            {confirmDialog}
         </main>
     );
 }

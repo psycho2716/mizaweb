@@ -13,6 +13,7 @@ import {
     Download,
     MapPin,
     MessageCircle,
+    Package,
     Phone,
     Search,
     User
@@ -154,6 +155,21 @@ function mergeOrderSocket(
             ...(order.cancellationReason ? { cancellationReason: order.cancellationReason } : {}),
             ...(order.qualityChecklist ? { qualityChecklist: order.qualityChecklist } : {})
         };
+        if (order.fulfillmentCarrierName?.trim()) {
+            next.fulfillmentCarrierName = order.fulfillmentCarrierName.trim();
+        } else {
+            delete next.fulfillmentCarrierName;
+        }
+        if (order.fulfillmentTrackingNumber?.trim()) {
+            next.fulfillmentTrackingNumber = order.fulfillmentTrackingNumber.trim();
+        } else {
+            delete next.fulfillmentTrackingNumber;
+        }
+        if (order.fulfillmentNotes?.trim()) {
+            next.fulfillmentNotes = order.fulfillmentNotes.trim();
+        } else {
+            delete next.fulfillmentNotes;
+        }
         if (order.receiptRequestNote !== undefined && order.receiptRequestNote !== "") {
             next.receiptRequestNote = order.receiptRequestNote;
         } else {
@@ -884,6 +900,55 @@ export function BuyerOrdersClient() {
                                             <p className="rounded-md border border-white/10 bg-[#080b10] p-3 text-sm leading-relaxed text-foreground/95">
                                                 {activeOrderSummary.deliveryNotes}
                                             </p>
+                                        </div>
+                                    ) : null}
+                                    {activeOrderSummary.fulfillmentCarrierName?.trim() ||
+                                    activeOrderSummary.fulfillmentTrackingNumber?.trim() ||
+                                    activeOrderSummary.fulfillmentNotes?.trim() ? (
+                                        <div className="space-y-3 sm:col-span-2 lg:col-span-3">
+                                            <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
+                                                <Package
+                                                    className="h-3.5 w-3.5 text-(--accent)"
+                                                    aria-hidden
+                                                />
+                                                Shipment from seller
+                                            </p>
+                                            <p className="text-[11px] text-(--muted)">
+                                                Your seller shared this for your reference (optional on their
+                                                side).
+                                            </p>
+                                            <div className="space-y-3 rounded-md border border-(--accent)/20 bg-[#080b10] p-4 text-sm">
+                                                {activeOrderSummary.fulfillmentCarrierName?.trim() ? (
+                                                    <div>
+                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                                            Courier / carrier
+                                                        </p>
+                                                        <p className="mt-1 font-medium text-foreground">
+                                                            {activeOrderSummary.fulfillmentCarrierName.trim()}
+                                                        </p>
+                                                    </div>
+                                                ) : null}
+                                                {activeOrderSummary.fulfillmentTrackingNumber?.trim() ? (
+                                                    <div>
+                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                                            Tracking number
+                                                        </p>
+                                                        <p className="mt-1 font-mono text-sm font-medium tabular-nums text-foreground">
+                                                            {activeOrderSummary.fulfillmentTrackingNumber.trim()}
+                                                        </p>
+                                                    </div>
+                                                ) : null}
+                                                {activeOrderSummary.fulfillmentNotes?.trim() ? (
+                                                    <div>
+                                                        <p className="text-[10px] font-semibold uppercase tracking-wider text-(--muted)">
+                                                            Additional details
+                                                        </p>
+                                                        <p className="mt-1 whitespace-pre-wrap leading-relaxed text-foreground/95">
+                                                            {activeOrderSummary.fulfillmentNotes.trim()}
+                                                        </p>
+                                                    </div>
+                                                ) : null}
+                                            </div>
                                         </div>
                                     ) : null}
                                     </div>

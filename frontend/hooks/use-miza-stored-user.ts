@@ -29,11 +29,17 @@ export function readMizaStoredUser(): AuthUser | null {
 }
 
 export function useMizaStoredUser(): { user: AuthUser | null; refresh: () => void } {
-    const [user, setUser] = useState<AuthUser | null>(() => readMizaStoredUser());
+    // Avoid reading localStorage during the initial render so the first client
+    // paint matches the server HTML (prevents hydration mismatch warnings).
+    const [user, setUser] = useState<AuthUser | null>(null);
 
     const refresh = useCallback(() => {
         setUser(readMizaStoredUser());
     }, []);
+
+    useEffect(() => {
+        refresh();
+    }, [refresh]);
 
     useEffect(() => {
         function onStorage(e: StorageEvent) {

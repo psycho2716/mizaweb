@@ -46,7 +46,12 @@ function dateKey(iso: string): string {
 function dateSeparatorLabel(iso: string): string {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    return d.toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric"
+    });
 }
 
 export interface DirectMessagesClientProps {
@@ -69,7 +74,18 @@ export function DirectMessagesClient({
     const prefSeller = searchParams.get("seller");
     const prefBuyer = searchParams.get("buyer");
 
-    const [user, setUser] = useState<AuthUser | null>(null);
+    const [user] = useState<AuthUser | null>(() => {
+        // Avoid localStorage access during SSR and avoid calling setState in an effect body.
+        if (typeof window === "undefined") {
+            return null;
+        }
+        try {
+            const raw = localStorage.getItem("miza_user");
+            return raw ? (JSON.parse(raw) as AuthUser) : null;
+        } catch {
+            return null;
+        }
+    });
     const [threads, setThreads] = useState<ConversationThread[]>([]);
     const [filterQuery, setFilterQuery] = useState("");
     const [activeId, setActiveId] = useState("");
@@ -79,7 +95,9 @@ export function DirectMessagesClient({
     const activeIdRef = useRef("");
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    activeIdRef.current = activeId;
+    useEffect(() => {
+        activeIdRef.current = activeId;
+    }, [activeId]);
 
     const refreshThreads = useCallback(async () => {
         try {
@@ -110,22 +128,14 @@ export function DirectMessagesClient({
         });
     }, [threads, filterQuery]);
 
-    useEffect(() => {
-        try {
-            const raw = localStorage.getItem("miza_user");
-            setUser(raw ? (JSON.parse(raw) as AuthUser) : null);
-        } catch {
-            setUser(null);
-        }
-    }, []);
-
     const token = typeof window !== "undefined" ? localStorage.getItem("miza_token") : null;
 
     useEffect(() => {
         if (!token || !user) {
             return;
         }
-        void refreshThreads();
+        // Defer to avoid triggering state updates synchronously inside this effect.
+        void Promise.resolve().then(() => refreshThreads());
     }, [token, user, refreshThreads]);
 
     useEffect(() => {
@@ -158,7 +168,8 @@ export function DirectMessagesClient({
 
     useEffect(() => {
         if (!activeId || !token) {
-            setMessages([]);
+            // Defer state clearing to avoid synchronous setState inside this effect.
+            void Promise.resolve().then(() => setMessages([]));
             return;
         }
         getDirectMessages(activeId)
@@ -223,7 +234,8 @@ export function DirectMessagesClient({
 
     const messageRows = useMemo(() => {
         const sorted = [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        const rows: Array<{ type: "sep"; label: string } | { type: "msg"; msg: DirectMessage }> = [];
+        const rows: Array<{ type: "sep"; label: string } | { type: "msg"; msg: DirectMessage }> =
+            [];
         let lastKey = "";
         for (const msg of sorted) {
             const k = dateKey(msg.createdAt);
@@ -244,13 +256,14 @@ export function DirectMessagesClient({
     }, [messages]);
 
     if (!token || !user) {
-        const returnTo =
-            pathname +
-            (searchParams.toString() ? `?${searchParams.toString()}` : "");
+        const returnTo = pathname + (searchParams.toString() ? `?${searchParams.toString()}` : "");
         const signInHref = `/auth/login?callbackUrl=${encodeURIComponent(returnTo)}`;
         return (
             <main
-                className={cn("mx-auto w-full flex-1 space-y-4 px-4 py-8 sm:px-6 lg:py-10", maxWidthClass)}
+                className={cn(
+                    "mx-auto w-full flex-1 space-y-4 px-4 py-8 sm:px-6 lg:py-10",
+                    maxWidthClass
+                )}
             >
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{heading}</h1>
                 <p className="text-sm text-(--muted)">Sign in to read and send messages.</p>
@@ -267,10 +280,15 @@ export function DirectMessagesClient({
     if (user.role !== mode) {
         return (
             <main
-                className={cn("mx-auto w-full flex-1 space-y-4 px-4 py-8 sm:px-6 lg:py-10", maxWidthClass)}
+                className={cn(
+                    "mx-auto w-full flex-1 space-y-4 px-4 py-8 sm:px-6 lg:py-10",
+                    maxWidthClass
+                )}
             >
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{heading}</h1>
-                <p className="text-sm text-(--muted)">This inbox is only available to your account type.</p>
+                <p className="text-sm text-(--muted)">
+                    This inbox is only available to your account type.
+                </p>
                 <Link
                     href="/"
                     className="inline-flex h-10 items-center justify-center rounded-md border border-(--border) bg-transparent px-4 text-sm font-medium text-foreground hover:bg-[#12151c]"
@@ -311,7 +329,7 @@ export function DirectMessagesClient({
                             )}
                             aria-hidden
                         />
-                        {socketLive ? "Live updates on" : "Connecting…"}
+                        {socketLive ? "Active" : "Connecting…"}
                     </div>
                 </div>
             </div>
@@ -452,7 +470,10 @@ export function DirectMessagesClient({
                                 return (
                                     <div
                                         key={m.id}
-                                        className={cn("flex", mine ? "justify-end" : "justify-start")}
+                                        className={cn(
+                                            "flex",
+                                            mine ? "justify-end" : "justify-start"
+                                        )}
                                     >
                                         <div
                                             className={cn(
@@ -465,7 +486,9 @@ export function DirectMessagesClient({
                                             <p className="text-[10px] font-semibold uppercase tracking-wider text-(--accent)">
                                                 {mine ? "You" : peerLabel}
                                             </p>
-                                            <p className="mt-1 whitespace-pre-wrap leading-relaxed">{m.body}</p>
+                                            <p className="mt-1 whitespace-pre-wrap leading-relaxed">
+                                                {m.body}
+                                            </p>
                                             <p className="mt-2 text-[10px] text-(--muted)">
                                                 {formatMessageTime(m.createdAt)}
                                             </p>
@@ -568,7 +591,9 @@ export function DirectMessagesClient({
                                     <div className="flex justify-between gap-3 border-b border-(--border)/80 pb-3">
                                         <dt className="text-(--muted)">Last activity</dt>
                                         <dd className="text-right text-xs text-foreground">
-                                            {formatThreadTime(activeThread.lastMessageAt ?? activeThread.updatedAt)}
+                                            {formatThreadTime(
+                                                activeThread.lastMessageAt ?? activeThread.updatedAt
+                                            )}
                                         </dd>
                                     </div>
                                     <div className="flex justify-between gap-3 pb-1">
@@ -589,8 +614,8 @@ export function DirectMessagesClient({
                                     </div>
                                 ) : null}
                                 <p className="text-[10px] leading-relaxed text-(--muted)">
-                                    For order-specific updates, use the chat on your order from the Orders
-                                    page.
+                                    For order-specific updates, use the chat on your order from the
+                                    Orders page.
                                 </p>
                             </>
                         ) : (

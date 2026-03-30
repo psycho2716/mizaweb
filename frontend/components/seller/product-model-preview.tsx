@@ -1,6 +1,6 @@
 "use client";
 
-import { Environment, OrbitControls, useGLTF } from "@react-three/drei";
+import { Environment, Html, OrbitControls, useGLTF, useProgress } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Suspense, useLayoutEffect, useMemo } from "react";
 import * as THREE from "three";
@@ -143,6 +143,35 @@ function SceneLights({ compact }: { compact?: boolean }) {
     );
 }
 
+function ModelLoadingFallback({ compact }: { compact?: boolean }) {
+    const { active, progress } = useProgress();
+    const pct = Math.round(progress);
+    const showPct = Number.isFinite(pct) && pct > 0;
+
+    return (
+        <>
+            <Html center style={{ pointerEvents: "none" }}>
+                <div
+                    className={cn(
+                        "rounded-xl border border-(--accent)/30 bg-[#050608]/70 px-4 py-3 text-center shadow-[0_0_0_1px_rgba(45,212,191,0.16),inset_0_1px_0_rgba(255,255,255,0.04)]",
+                        compact ? "text-[11px]" : "text-[12px]"
+                    )}
+                >
+                    <p className="font-semibold text-(--accent)">
+                        {active ? "Loading 3D..." : "Preparing 3D..."}
+                        {showPct ? ` ${pct}%` : null}
+                    </p>
+                    <p className="mt-0.5 text-(--muted)">Please wait a moment.</p>
+                </div>
+            </Html>
+            <mesh aria-label="3D model loading placeholder">
+                <boxGeometry args={[0.35, 0.35, 0.35]} />
+                <meshBasicMaterial color="#2dd4bf" wireframe />
+            </mesh>
+        </>
+    );
+}
+
 export interface ProductModelPreviewProps {
     modelUrl: string;
     className?: string;
@@ -178,12 +207,7 @@ export function ProductModelPreview({ modelUrl, className, compact, customizatio
             >
                 {!embed ? <color attach="background" args={["#0c1018"]} /> : null}
                 <Suspense
-                    fallback={
-                        <mesh>
-                            <boxGeometry args={[0.35, 0.35, 0.35]} />
-                            <meshBasicMaterial color="#2dd4bf" wireframe />
-                        </mesh>
-                    }
+                    fallback={<ModelLoadingFallback compact={compact} />}
                 >
                     <SceneLights compact={compact} />
                     <CustomizableGltfModel url={modelUrl} customization={customization} />
