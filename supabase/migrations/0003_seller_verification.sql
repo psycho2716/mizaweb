@@ -1,5 +1,5 @@
 create table if not exists seller_profiles (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   profile_id uuid not null references profiles(id) on delete cascade,
   verification_status text not null default 'unsubmitted'
     check (verification_status in ('unsubmitted','pending','approved','rejected')),
@@ -8,7 +8,7 @@ create table if not exists seller_profiles (
 );
 
 create table if not exists seller_verification_submissions (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   seller_profile_id uuid not null references seller_profiles(id) on delete cascade,
   permit_file_path text not null,
   status text not null default 'pending' check (status in ('pending','approved','rejected')),

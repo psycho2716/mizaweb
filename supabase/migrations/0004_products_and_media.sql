@@ -1,5 +1,5 @@
 create table if not exists products (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   seller_profile_id uuid not null references seller_profiles(id) on delete cascade,
   title text not null,
   description text not null,

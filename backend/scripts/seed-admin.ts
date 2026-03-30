@@ -14,8 +14,19 @@ import { resolve } from "node:path";
 
 config({ path: resolve(__dirname, "../.env") });
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@miza.dev";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "Admin123!";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@mizaweb.local";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin1234";
+
+function isLikelyPublishableKey(value: string): boolean {
+    return value.startsWith("sb_publishable_");
+}
+
+function isLikelySecretOrServiceRoleKey(value: string): boolean {
+    return (
+        value.startsWith("sb_secret_") ||
+        value.startsWith("eyJ")
+    );
+}
 
 function isDuplicateAuthError(message: string): boolean {
     const m = message.toLowerCase();
@@ -29,9 +40,18 @@ function isDuplicateAuthError(message: string): boolean {
 
 async function main(): Promise<void> {
     const url = process.env.SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const serviceKey =
+        process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY;
     if (!url || !serviceKey) {
-        throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+        throw new Error(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) must be set"
+        );
+    }
+    if (isLikelyPublishableKey(serviceKey) || !isLikelySecretOrServiceRoleKey(serviceKey)) {
+        throw new Error(
+            "Invalid admin key: SUPABASE_SERVICE_ROLE_KEY appears to be a publishable/anon key. " +
+                "Use your project's service-role/secret key (Dashboard -> Settings -> API)."
+        );
     }
 
     const supabase = createClient(url, serviceKey);

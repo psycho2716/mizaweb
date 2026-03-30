@@ -16,6 +16,7 @@
     "supabase:status": "npx supabase status"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "supabase": "^2.84.5"
   }
 }

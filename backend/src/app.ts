@@ -10,7 +10,10 @@ import { z } from "zod";
 import { env } from "./config/env";
 import { authorizeRole } from "./middleware/authorize-role";
 import { authenticate, resolveOptionalAuthUserId } from "./middleware/authenticate";
-import { parseAndValidateCartSelections, snapshotSelectionsForOrderLine } from "./lib/cart-selections";
+import {
+    parseAndValidateCartSelections,
+    snapshotSelectionsForOrderLine
+} from "./lib/cart-selections";
 import {
     deductStockForOrderAndPersist,
     restoreStockForOrderAndPersist
@@ -153,7 +156,9 @@ async function withResolvedSellerProfileMedia(profile: SellerProfile): Promise<S
     return out;
 }
 
-async function withResolvedPaymentQrImages(methods: SellerPaymentMethod[]): Promise<SellerPaymentMethod[]> {
+async function withResolvedPaymentQrImages(
+    methods: SellerPaymentMethod[]
+): Promise<SellerPaymentMethod[]> {
     return Promise.all(
         methods.map(async (method) => {
             if (!method.qrImageUrl) {
@@ -413,7 +418,8 @@ async function mergeGuestCartIntoBuyer(
 
 function parseListPagination(query: express.Request["query"]): { page: number; limit: number } {
     const rawPage = typeof query.page === "string" ? Number.parseInt(query.page, 10) : Number.NaN;
-    const rawLimit = typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : Number.NaN;
+    const rawLimit =
+        typeof query.limit === "string" ? Number.parseInt(query.limit, 10) : Number.NaN;
     const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
     const limitRaw = Number.isFinite(rawLimit) && rawLimit >= 1 ? Math.floor(rawLimit) : 10;
     const limit = Math.min(100, Math.max(1, limitRaw));
@@ -649,9 +655,7 @@ app.post("/auth/register", authLimiter, async (request, response) => {
         console.error("[register] persist", error);
         response.status(500).json({
             error:
-                error instanceof Error
-                    ? error.message
-                    : "Failed to save account. Please try again."
+                error instanceof Error ? error.message : "Failed to save account. Please try again."
         });
         return;
     }
@@ -976,61 +980,66 @@ app.patch("/seller/profile", authenticate, authorizeRole(["seller"]), async (req
     response.json({ ok: true, data: profile });
 });
 
-app.post("/seller/location-request", authenticate, authorizeRole(["seller"]), async (request, response) => {
-    const schema = z.object({
-        shopLatitude: z.number().gte(-90).lte(90),
-        shopLongitude: z.number().gte(-180).lte(180),
-        note: z.string().max(500).optional()
-    });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-    const sellerId = request.authUserId as string;
-    const hasPending = [...db.sellerLocationRequests.values()].some(
-        (r) => r.sellerId === sellerId && r.status === "pending"
-    );
-    if (hasPending) {
-        response.status(409).json({
-            error: "You already have a pending shop location request. Wait for admin review."
+app.post(
+    "/seller/location-request",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const schema = z.object({
+            shopLatitude: z.number().gte(-90).lte(90),
+            shopLongitude: z.number().gte(-180).lte(180),
+            note: z.string().max(500).optional()
         });
-        return;
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const sellerId = request.authUserId as string;
+        const hasPending = [...db.sellerLocationRequests.values()].some(
+            (r) => r.sellerId === sellerId && r.status === "pending"
+        );
+        if (hasPending) {
+            response.status(409).json({
+                error: "You already have a pending shop location request. Wait for admin review."
+            });
+            return;
+        }
+        const profile = db.sellerProfiles.get(sellerId);
+        if (!profile) {
+            response.status(404).json({ error: "Seller profile not found" });
+            return;
+        }
+        const id = `slr-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        const row: SellerLocationChangeRequest = {
+            id,
+            sellerId,
+            requestedLatitude: parsed.data.shopLatitude,
+            requestedLongitude: parsed.data.shopLongitude,
+            status: "pending",
+            createdAt: new Date().toISOString(),
+            ...(Number.isFinite(profile.shopLatitude) && Number.isFinite(profile.shopLongitude)
+                ? {
+                      previousLatitude: profile.shopLatitude as number,
+                      previousLongitude: profile.shopLongitude as number
+                  }
+                : {}),
+            ...(parsed.data.note && parsed.data.note.trim().length > 0
+                ? { note: parsed.data.note.trim() }
+                : {})
+        };
+        try {
+            await persistSellerLocationChangeRequest(row);
+            db.sellerLocationRequests.set(id, row);
+            response.status(201).json({ data: row });
+        } catch (error) {
+            console.error("[seller/location-request]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to submit request"
+            });
+        }
     }
-    const profile = db.sellerProfiles.get(sellerId);
-    if (!profile) {
-        response.status(404).json({ error: "Seller profile not found" });
-        return;
-    }
-    const id = `slr-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const row: SellerLocationChangeRequest = {
-        id,
-        sellerId,
-        requestedLatitude: parsed.data.shopLatitude,
-        requestedLongitude: parsed.data.shopLongitude,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-        ...(Number.isFinite(profile.shopLatitude) && Number.isFinite(profile.shopLongitude)
-            ? {
-                  previousLatitude: profile.shopLatitude as number,
-                  previousLongitude: profile.shopLongitude as number
-              }
-            : {}),
-        ...(parsed.data.note && parsed.data.note.trim().length > 0
-            ? { note: parsed.data.note.trim() }
-            : {})
-    };
-    try {
-        await persistSellerLocationChangeRequest(row);
-        db.sellerLocationRequests.set(id, row);
-        response.status(201).json({ data: row });
-    } catch (error) {
-        console.error("[seller/location-request]", error);
-        response.status(500).json({
-            error: error instanceof Error ? error.message : "Failed to submit request"
-        });
-    }
-});
+);
 
 app.get(
     "/seller/payment-methods",
@@ -1120,7 +1129,8 @@ app.patch(
         row.accountNumber = parsed.data.accountNumber ?? row.accountNumber;
         if (parsed.data.qrImageUrl) {
             row.qrImageUrl =
-                normalizeVerificationDocsStoredUrl(parsed.data.qrImageUrl) ?? parsed.data.qrImageUrl;
+                normalizeVerificationDocsStoredUrl(parsed.data.qrImageUrl) ??
+                parsed.data.qrImageUrl;
         }
         try {
             await persistSellerPaymentMethod(row);
@@ -1309,49 +1319,44 @@ app.patch(
     }
 );
 
-app.delete(
-    "/buyer/account",
-    authenticate,
-    authorizeRole(["buyer"]),
-    async (request, response) => {
-        if (!isSupabaseAuthReady()) {
-            response.status(503).json({ error: "Account deletion requires Supabase Auth setup" });
-            return;
-        }
-        const schema = z.object({ password: z.string().min(8) });
-        const parsed = schema.safeParse(request.body);
-        if (!parsed.success) {
-            response.status(400).json({ error: parsed.error.flatten() });
-            return;
-        }
-        const user = db.users.get(request.authUserId as string);
-        if (!user) {
-            response.status(404).json({ error: "User not found" });
-            return;
-        }
-        const anon = createSupabaseAnonClient();
-        const admin = createSupabaseAdminClient();
-        if (!anon || !admin) {
-            response.status(503).json({ error: "Authentication service unavailable" });
-            return;
-        }
-        const { error: signErr } = await anon.auth.signInWithPassword({
-            email: user.email,
-            password: parsed.data.password
-        });
-        if (signErr) {
-            response.status(401).json({ error: "Password is incorrect" });
-            return;
-        }
-        const { error: deleteErr } = await admin.auth.admin.deleteUser(user.id);
-        if (deleteErr) {
-            response.status(500).json({ error: deleteErr.message });
-            return;
-        }
-        await cleanupBuyerRuntimeStateAfterAuthDeletion(user.id);
-        response.json({ ok: true });
+app.delete("/buyer/account", authenticate, authorizeRole(["buyer"]), async (request, response) => {
+    if (!isSupabaseAuthReady()) {
+        response.status(503).json({ error: "Account deletion requires Supabase Auth setup" });
+        return;
     }
-);
+    const schema = z.object({ password: z.string().min(8) });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    const user = db.users.get(request.authUserId as string);
+    if (!user) {
+        response.status(404).json({ error: "User not found" });
+        return;
+    }
+    const anon = createSupabaseAnonClient();
+    const admin = createSupabaseAdminClient();
+    if (!anon || !admin) {
+        response.status(503).json({ error: "Authentication service unavailable" });
+        return;
+    }
+    const { error: signErr } = await anon.auth.signInWithPassword({
+        email: user.email,
+        password: parsed.data.password
+    });
+    if (signErr) {
+        response.status(401).json({ error: "Password is incorrect" });
+        return;
+    }
+    const { error: deleteErr } = await admin.auth.admin.deleteUser(user.id);
+    if (deleteErr) {
+        response.status(500).json({ error: deleteErr.message });
+        return;
+    }
+    await cleanupBuyerRuntimeStateAfterAuthDeletion(user.id);
+    response.json({ ok: true });
+});
 
 app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (request, response) => {
     const schema = z.object({
@@ -1495,7 +1500,8 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
             if (!supabase) {
                 throw new Error("Authentication service unavailable");
             }
-            const { data: existing, error: getErr } = await supabase.auth.admin.getUserById(buyerId);
+            const { data: existing, error: getErr } =
+                await supabase.auth.admin.getUserById(buyerId);
             if (getErr || !existing.user) {
                 throw new Error(getErr?.message ?? "User not found in auth");
             }
@@ -1698,7 +1704,10 @@ app.post(
         const canonicalUrl =
             getVerificationDocsCanonicalUrl(parsed.data.path) ??
             mockVerificationDocsAssetUrl(parsed.data.path);
-        const signed = await createSignedVerificationDownloadUrl(parsed.data.path, 60 * 60 * 24 * 7);
+        const signed = await createSignedVerificationDownloadUrl(
+            parsed.data.path,
+            60 * 60 * 24 * 7
+        );
         const readUrl = signed ?? canonicalUrl;
 
         response.status(200).json({
@@ -2166,7 +2175,10 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
         madeToOrder: z.boolean().optional(),
         stockQuantity: z.number().int().min(0).optional(),
         isFeatured: z.boolean().optional(),
-        videoUrl: z.union([z.string().url(), z.literal("")]).optional().nullable(),
+        videoUrl: z
+            .union([z.string().url(), z.literal("")])
+            .optional()
+            .nullable(),
         dimensionChoices: z.array(z.string()).optional(),
         colorChoices: z.array(z.string()).optional(),
         imageUrls: z.array(z.string().url()).max(5).optional()
@@ -2184,7 +2196,10 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
         parsed.data.stockQuantity === undefined
     ) {
         response.status(400).json({
-            error: { formErrors: [], fieldErrors: { stockQuantity: ["Required when not made to order"] } }
+            error: {
+                formErrors: [],
+                fieldErrors: { stockQuantity: ["Required when not made to order"] }
+            }
         });
         return;
     }
@@ -2242,7 +2257,10 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
                 await deleteProductMedia(media.id);
             } catch (err) {
                 response.status(500).json({
-                    error: err instanceof Error ? err.message : "Failed to remove existing product images"
+                    error:
+                        err instanceof Error
+                            ? err.message
+                            : "Failed to remove existing product images"
                 });
                 return;
             }
@@ -2274,32 +2292,37 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
     response.json({ ok: true, data: rewriteProductRecordForClient(product) });
 });
 
-app.post("/products/:id/publish", authenticate, authorizeRole(["seller"]), async (request, response) => {
-    const id = z.string().min(1).parse(request.params.id);
-    const product = db.products.get(id);
-    if (!product || product.sellerId !== request.authUserId) {
-        response.status(404).json({ error: "Not found" });
-        return;
-    }
+app.post(
+    "/products/:id/publish",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(id);
+        if (!product || product.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
 
-    const verificationStatus = db.sellerStatus.get(request.authUserId as string);
-    if (verificationStatus !== "approved") {
-        response.status(403).json({ error: "Seller is not verified to publish" });
-        return;
-    }
+        const verificationStatus = db.sellerStatus.get(request.authUserId as string);
+        if (verificationStatus !== "approved") {
+            response.status(403).json({ error: "Seller is not verified to publish" });
+            return;
+        }
 
-    product.isPublished = true;
-    try {
-        await persistProduct(product);
-    } catch (err) {
-        product.isPublished = false;
-        response.status(500).json({
-            error: err instanceof Error ? err.message : "Failed to save product"
-        });
-        return;
+        product.isPublished = true;
+        try {
+            await persistProduct(product);
+        } catch (err) {
+            product.isPublished = false;
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save product"
+            });
+            return;
+        }
+        response.json({ ok: true });
     }
-    response.json({ ok: true });
-});
+);
 
 app.post(
     "/products/:id/unpublish",
@@ -2406,77 +2429,82 @@ app.get(
     }
 );
 
-app.post("/products/:id/reviews", authenticate, authorizeRole(["buyer"]), async (request, response) => {
-    const productId = z.string().min(1).parse(request.params.id);
-    const product = db.products.get(productId);
-    if (!product || !product.isPublished) {
-        response.status(404).json({ error: "Product not found" });
-        return;
-    }
-    const schema = z.object({
-        rating: z.number().int().min(1).max(5),
-        body: z.string().max(2000).optional().default("")
-    });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-    const buyerId = request.authUserId as string;
-    const { hasCompletedPurchase, eligible, cooldownEndsAt } = getReviewEligibilityForBuyer(
-        buyerId,
-        productId
-    );
-    if (!hasCompletedPurchase) {
-        response.status(403).json({
-            error: "Reviews are available only after this product is delivered from a completed order."
-        });
-        return;
-    }
-    if (!eligible) {
-        response.status(429).json({
-            error: "You can post or update a review for this product once every 30 days.",
-            ...(cooldownEndsAt ? { cooldownEndsAt } : {})
-        });
-        return;
-    }
-    const existing = [...db.productReviews.values()].find(
-        (r) => r.productId === productId && r.buyerId === buyerId
-    );
-    const now = new Date().toISOString();
-    const review = existing
-        ? {
-              ...existing,
-              rating: parsed.data.rating,
-              body: parsed.data.body,
-              updatedAt: now
-          }
-        : {
-              id: `pr-${randomUUID()}`,
-              productId,
-              buyerId,
-              rating: parsed.data.rating,
-              body: parsed.data.body,
-              createdAt: now,
-              updatedAt: now
-          };
-    db.productReviews.set(review.id, review);
-    try {
-        await persistProductReview(review);
-    } catch (error) {
-        db.productReviews.delete(review.id);
-        response.status(500).json({
-            error: error instanceof Error ? error.message : "Failed to save review"
-        });
-        return;
-    }
-    response.status(existing ? 200 : 201).json({
-        data: {
-            ...review,
-            authorLabel: reviewerDisplayLabel(buyerId)
+app.post(
+    "/products/:id/reviews",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response) => {
+        const productId = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(productId);
+        if (!product || !product.isPublished) {
+            response.status(404).json({ error: "Product not found" });
+            return;
         }
-    });
-});
+        const schema = z.object({
+            rating: z.number().int().min(1).max(5),
+            body: z.string().max(2000).optional().default("")
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const buyerId = request.authUserId as string;
+        const { hasCompletedPurchase, eligible, cooldownEndsAt } = getReviewEligibilityForBuyer(
+            buyerId,
+            productId
+        );
+        if (!hasCompletedPurchase) {
+            response.status(403).json({
+                error: "Reviews are available only after this product is delivered from a completed order."
+            });
+            return;
+        }
+        if (!eligible) {
+            response.status(429).json({
+                error: "You can post or update a review for this product once every 30 days.",
+                ...(cooldownEndsAt ? { cooldownEndsAt } : {})
+            });
+            return;
+        }
+        const existing = [...db.productReviews.values()].find(
+            (r) => r.productId === productId && r.buyerId === buyerId
+        );
+        const now = new Date().toISOString();
+        const review = existing
+            ? {
+                  ...existing,
+                  rating: parsed.data.rating,
+                  body: parsed.data.body,
+                  updatedAt: now
+              }
+            : {
+                  id: `pr-${randomUUID()}`,
+                  productId,
+                  buyerId,
+                  rating: parsed.data.rating,
+                  body: parsed.data.body,
+                  createdAt: now,
+                  updatedAt: now
+              };
+        db.productReviews.set(review.id, review);
+        try {
+            await persistProductReview(review);
+        } catch (error) {
+            db.productReviews.delete(review.id);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to save review"
+            });
+            return;
+        }
+        response.status(existing ? 200 : 201).json({
+            data: {
+                ...review,
+                authorLabel: reviewerDisplayLabel(buyerId)
+            }
+        });
+    }
+);
 
 app.delete("/products/:id", authenticate, authorizeRole(["seller"]), async (request, response) => {
     const id = z.string().min(1).parse(request.params.id);
@@ -2520,74 +2548,88 @@ app.delete("/products/:id", authenticate, authorizeRole(["seller"]), async (requ
     response.json({ ok: true });
 });
 
-app.post("/products/:id/media", authenticate, authorizeRole(["seller"]), async (request, response) => {
-    const productId = z.string().min(1).parse(request.params.id);
-    const product = db.products.get(productId);
-    if (!product || product.sellerId !== request.authUserId) {
-        response.status(404).json({ error: "Not found" });
-        return;
-    }
-    const imageCount = [...db.productMedia.values()].filter((m) => m.productId === productId).length;
-    if (imageCount >= 5) {
-        response.status(400).json({ error: "Maximum of 5 images per product" });
-        return;
-    }
-    const schema = z.object({ url: z.string().url() });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-    const id = `pm-${randomUUID()}`;
-    const media = { id, productId, url: parsed.data.url };
-    db.productMedia.set(id, media);
-    try {
-        await persistProductMedia(media);
-    } catch (err) {
-        db.productMedia.delete(id);
-        response.status(500).json({
-            error: err instanceof Error ? err.message : "Failed to save product image"
-        });
-        return;
-    }
-    response.status(201).json({ id });
-});
-
-app.post("/products/:id/media/upload-url", authenticate, authorizeRole(["seller"]), async (request, response) => {
-    const productId = z.string().min(1).parse(request.params.id);
-    const product = db.products.get(productId);
-    if (!product || product.sellerId !== request.authUserId) {
-        response.status(404).json({ error: "Not found" });
-        return;
-    }
-    const schema = z.object({
-        filename: z.string().min(3).max(255),
-        assetKind: z.enum(["image", "video"])
-    });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-    if (parsed.data.assetKind === "image") {
-        const imageCount = [...db.productMedia.values()].filter((m) => m.productId === productId).length;
+app.post(
+    "/products/:id/media",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const productId = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(productId);
+        if (!product || product.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        const imageCount = [...db.productMedia.values()].filter(
+            (m) => m.productId === productId
+        ).length;
         if (imageCount >= 5) {
             response.status(400).json({ error: "Maximum of 5 images per product" });
             return;
         }
-    } else if (product.videoUrl) {
-        response.status(400).json({ error: "A video is already set; clear video URL first" });
-        return;
+        const schema = z.object({ url: z.string().url() });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const id = `pm-${randomUUID()}`;
+        const media = { id, productId, url: parsed.data.url };
+        db.productMedia.set(id, media);
+        try {
+            await persistProductMedia(media);
+        } catch (err) {
+            db.productMedia.delete(id);
+            response.status(500).json({
+                error: err instanceof Error ? err.message : "Failed to save product image"
+            });
+            return;
+        }
+        response.status(201).json({ id });
     }
-    const kind = parsed.data.assetKind === "image" ? "product-image" : "product-video";
-    const target = await generateVerificationUploadTarget(
-        request.authUserId as string,
-        parsed.data.filename,
-        kind,
-        productId
-    );
-    response.status(201).json(target);
-});
+);
+
+app.post(
+    "/products/:id/media/upload-url",
+    authenticate,
+    authorizeRole(["seller"]),
+    async (request, response) => {
+        const productId = z.string().min(1).parse(request.params.id);
+        const product = db.products.get(productId);
+        if (!product || product.sellerId !== request.authUserId) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        const schema = z.object({
+            filename: z.string().min(3).max(255),
+            assetKind: z.enum(["image", "video"])
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        if (parsed.data.assetKind === "image") {
+            const imageCount = [...db.productMedia.values()].filter(
+                (m) => m.productId === productId
+            ).length;
+            if (imageCount >= 5) {
+                response.status(400).json({ error: "Maximum of 5 images per product" });
+                return;
+            }
+        } else if (product.videoUrl) {
+            response.status(400).json({ error: "A video is already set; clear video URL first" });
+            return;
+        }
+        const kind = parsed.data.assetKind === "image" ? "product-image" : "product-video";
+        const target = await generateVerificationUploadTarget(
+            request.authUserId as string,
+            parsed.data.filename,
+            kind,
+            productId
+        );
+        response.status(201).json(target);
+    }
+);
 
 app.post(
     "/products/:id/model-3d/upload-url",
@@ -3011,243 +3053,255 @@ app.post(
     authenticate,
     authorizeRole(["buyer"]),
     async (request, response): Promise<void> => {
-    const onlinePaymentEntry = z.object({
-        sellerId: z.string().min(1),
-        sellerPaymentMethodId: z.string().min(1),
-        receiptProofUrl: z.string().url()
-    });
-    const schema = z.object({
-        paymentMethod: z.enum(["cash", "online"]),
-        paymentReference: z.string().max(500).optional(),
-        onlinePayments: z.array(onlinePaymentEntry).optional(),
-        estimatedDeliveryStartAt: z.string().optional(),
-        estimatedDeliveryEndAt: z.string().optional(),
-        estimatedDeliveryRangeDisplay: z.string().max(220).optional(),
-        shippingRecipientName: z.string().max(120).optional(),
-        shippingContactNumber: z.string().max(40).optional(),
-        shippingAddressLine: z.string().max(255).optional(),
-        shippingCity: z.string().max(120).optional(),
-        shippingPostalCode: z.string().max(20).optional(),
-        deliveryNotes: z.string().max(2000).optional()
-    });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-
-    const buyerId = request.authUserId as string;
-    const guestSessionId = getGuestSessionId(request);
-    try {
-        await mergeGuestCartIntoBuyer(buyerId, guestSessionId);
-    } catch (error) {
-        console.error("[POST /checkout] merge guest cart", error);
-        response.status(500).json({ error: "Could not prepare checkout" });
-        return;
-    }
-
-    const items = [...db.cartItems.values()].filter((entry) => entry.buyerId === buyerId);
-    if (items.length === 0) {
-        response.status(400).json({ error: "Cart is empty" });
-        return;
-    }
-
-    const products = items
-        .map((item) => db.products.get(item.productId))
-        .filter((product): product is NonNullable<typeof product> => Boolean(product));
-    if (products.length !== items.length) {
-        response.status(400).json({ error: "One or more cart items are invalid" });
-        return;
-    }
-
-    const groups = new Map<string, typeof items>();
-    for (const item of items) {
-        const product = db.products.get(item.productId);
-        if (!product) {
-            continue;
-        }
-        const list = groups.get(product.sellerId) ?? [];
-        list.push(item);
-        groups.set(product.sellerId, list);
-    }
-    const sellerIds = [...groups.keys()];
-    if (sellerIds.length === 0) {
-        response.status(400).json({ error: "Unable to resolve seller for checkout" });
-        return;
-    }
-
-    if (parsed.data.paymentMethod === "online") {
-        const ops = parsed.data.onlinePayments ?? [];
-        if (ops.length !== sellerIds.length) {
-            response
-                .status(400)
-                .json({ error: "Provide exactly one online payment entry per seller in your cart" });
+        const onlinePaymentEntry = z.object({
+            sellerId: z.string().min(1),
+            sellerPaymentMethodId: z.string().min(1),
+            receiptProofUrl: z.string().url()
+        });
+        const schema = z.object({
+            paymentMethod: z.enum(["cash", "online"]),
+            paymentReference: z.string().max(500).optional(),
+            onlinePayments: z.array(onlinePaymentEntry).optional(),
+            estimatedDeliveryStartAt: z.string().optional(),
+            estimatedDeliveryEndAt: z.string().optional(),
+            estimatedDeliveryRangeDisplay: z.string().max(220).optional(),
+            shippingRecipientName: z.string().max(120).optional(),
+            shippingContactNumber: z.string().max(40).optional(),
+            shippingAddressLine: z.string().max(255).optional(),
+            shippingCity: z.string().max(120).optional(),
+            shippingPostalCode: z.string().max(20).optional(),
+            deliveryNotes: z.string().max(2000).optional()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
             return;
         }
-        const seenSeller = new Set<string>();
-        for (const op of ops) {
-            if (!sellerIds.includes(op.sellerId)) {
-                response.status(400).json({ error: "Unknown seller in online payment data" });
-                return;
-            }
-            if (seenSeller.has(op.sellerId)) {
-                response.status(400).json({ error: "Duplicate seller in online payment data" });
-                return;
-            }
-            seenSeller.add(op.sellerId);
-            const method = db.sellerPaymentMethods.get(op.sellerPaymentMethodId);
-            if (!method || method.sellerId !== op.sellerId) {
-                response.status(400).json({ error: "Invalid payment method for seller" });
-                return;
-            }
-        }
-        for (const sid of sellerIds) {
-            if (!seenSeller.has(sid)) {
-                response.status(400).json({ error: "Missing online payment for a seller" });
-                return;
-            }
-        }
-    }
 
-    const qtyByProduct = new Map<string, number>();
-    for (const item of items) {
-        qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) ?? 0) + item.quantity);
-    }
-    for (const [productId, qty] of qtyByProduct) {
-        const p = db.products.get(productId);
-        if (!p || p.madeToOrder) {
-            continue;
-        }
-        const stock = p.stockQuantity ?? 0;
-        if (stock < qty) {
-            response.status(400).json({
-                error: `Insufficient stock for "${p.title}". Available: ${stock}, requested: ${qty}.`
-            });
+        const buyerId = request.authUserId as string;
+        const guestSessionId = getGuestSessionId(request);
+        try {
+            await mergeGuestCartIntoBuyer(buyerId, guestSessionId);
+        } catch (error) {
+            console.error("[POST /checkout] merge guest cart", error);
+            response.status(500).json({ error: "Could not prepare checkout" });
             return;
         }
-    }
 
-    try {
-        const baseTime = Date.now();
-        const createdOrders: Array<{ id: string; sellerId: string; totalAmount: number }> = [];
-        let orderIndex = 0;
+        const items = [...db.cartItems.values()].filter((entry) => entry.buyerId === buyerId);
+        if (items.length === 0) {
+            response.status(400).json({ error: "Cart is empty" });
+            return;
+        }
 
-        const shippingBody: CheckoutShippingBody = {};
-        if (parsed.data.shippingRecipientName) {
-            shippingBody.shippingRecipientName = parsed.data.shippingRecipientName;
+        const products = items
+            .map((item) => db.products.get(item.productId))
+            .filter((product): product is NonNullable<typeof product> => Boolean(product));
+        if (products.length !== items.length) {
+            response.status(400).json({ error: "One or more cart items are invalid" });
+            return;
         }
-        if (parsed.data.shippingContactNumber) {
-            shippingBody.shippingContactNumber = parsed.data.shippingContactNumber;
-        }
-        if (parsed.data.shippingAddressLine) {
-            shippingBody.shippingAddressLine = parsed.data.shippingAddressLine;
-        }
-        if (parsed.data.shippingCity) {
-            shippingBody.shippingCity = parsed.data.shippingCity;
-        }
-        if (parsed.data.shippingPostalCode) {
-            shippingBody.shippingPostalCode = parsed.data.shippingPostalCode;
-        }
-        if (parsed.data.deliveryNotes) {
-            shippingBody.deliveryNotes = parsed.data.deliveryNotes;
-        }
-        const shippingSnapshot = checkoutShippingSnapshotFromBody(shippingBody);
 
-        for (const sellerId of sellerIds) {
-            const groupItems = groups.get(sellerId);
-            if (!groupItems?.length) {
+        const groups = new Map<string, typeof items>();
+        for (const item of items) {
+            const product = db.products.get(item.productId);
+            if (!product) {
                 continue;
             }
-            const totalAmount = groupItems.reduce((sum, item) => {
-                const product = db.products.get(item.productId);
-                return sum + (product?.basePrice ?? 0) * item.quantity;
-            }, 0);
+            const list = groups.get(product.sellerId) ?? [];
+            list.push(item);
+            groups.set(product.sellerId, list);
+        }
+        const sellerIds = [...groups.keys()];
+        if (sellerIds.length === 0) {
+            response.status(400).json({ error: "Unable to resolve seller for checkout" });
+            return;
+        }
 
-            const op =
-                parsed.data.paymentMethod === "online"
-                    ? parsed.data.onlinePayments!.find((o) => o.sellerId === sellerId)
+        if (parsed.data.paymentMethod === "online") {
+            const ops = parsed.data.onlinePayments ?? [];
+            if (ops.length !== sellerIds.length) {
+                response
+                    .status(400)
+                    .json({
+                        error: "Provide exactly one online payment entry per seller in your cart"
+                    });
+                return;
+            }
+            const seenSeller = new Set<string>();
+            for (const op of ops) {
+                if (!sellerIds.includes(op.sellerId)) {
+                    response.status(400).json({ error: "Unknown seller in online payment data" });
+                    return;
+                }
+                if (seenSeller.has(op.sellerId)) {
+                    response.status(400).json({ error: "Duplicate seller in online payment data" });
+                    return;
+                }
+                seenSeller.add(op.sellerId);
+                const method = db.sellerPaymentMethods.get(op.sellerPaymentMethodId);
+                if (!method || method.sellerId !== op.sellerId) {
+                    response.status(400).json({ error: "Invalid payment method for seller" });
+                    return;
+                }
+            }
+            for (const sid of sellerIds) {
+                if (!seenSeller.has(sid)) {
+                    response.status(400).json({ error: "Missing online payment for a seller" });
+                    return;
+                }
+            }
+        }
+
+        const qtyByProduct = new Map<string, number>();
+        for (const item of items) {
+            qtyByProduct.set(
+                item.productId,
+                (qtyByProduct.get(item.productId) ?? 0) + item.quantity
+            );
+        }
+        for (const [productId, qty] of qtyByProduct) {
+            const p = db.products.get(productId);
+            if (!p || p.madeToOrder) {
+                continue;
+            }
+            const stock = p.stockQuantity ?? 0;
+            if (stock < qty) {
+                response.status(400).json({
+                    error: `Insufficient stock for "${p.title}". Available: ${stock}, requested: ${qty}.`
+                });
+                return;
+            }
+        }
+
+        try {
+            const baseTime = Date.now();
+            const createdOrders: Array<{ id: string; sellerId: string; totalAmount: number }> = [];
+            let orderIndex = 0;
+
+            const shippingBody: CheckoutShippingBody = {};
+            if (parsed.data.shippingRecipientName) {
+                shippingBody.shippingRecipientName = parsed.data.shippingRecipientName;
+            }
+            if (parsed.data.shippingContactNumber) {
+                shippingBody.shippingContactNumber = parsed.data.shippingContactNumber;
+            }
+            if (parsed.data.shippingAddressLine) {
+                shippingBody.shippingAddressLine = parsed.data.shippingAddressLine;
+            }
+            if (parsed.data.shippingCity) {
+                shippingBody.shippingCity = parsed.data.shippingCity;
+            }
+            if (parsed.data.shippingPostalCode) {
+                shippingBody.shippingPostalCode = parsed.data.shippingPostalCode;
+            }
+            if (parsed.data.deliveryNotes) {
+                shippingBody.deliveryNotes = parsed.data.deliveryNotes;
+            }
+            const shippingSnapshot = checkoutShippingSnapshotFromBody(shippingBody);
+
+            for (const sellerId of sellerIds) {
+                const groupItems = groups.get(sellerId);
+                if (!groupItems?.length) {
+                    continue;
+                }
+                const totalAmount = groupItems.reduce((sum, item) => {
+                    const product = db.products.get(item.productId);
+                    return sum + (product?.basePrice ?? 0) * item.quantity;
+                }, 0);
+
+                const op =
+                    parsed.data.paymentMethod === "online"
+                        ? parsed.data.onlinePayments!.find((o) => o.sellerId === sellerId)
+                        : undefined;
+                const method = op
+                    ? db.sellerPaymentMethods.get(op.sellerPaymentMethodId)
                     : undefined;
-            const method = op ? db.sellerPaymentMethods.get(op.sellerPaymentMethodId) : undefined;
-            const paymentReference =
-                parsed.data.paymentMethod === "online" && method
-                    ? `${method.methodName} · ${method.accountName}`
-                    : parsed.data.paymentReference;
+                const paymentReference =
+                    parsed.data.paymentMethod === "online" && method
+                        ? `${method.methodName} · ${method.accountName}`
+                        : parsed.data.paymentReference;
 
-            const id = `o-${baseTime}-${orderIndex}`;
-            orderIndex += 1;
+                const id = `o-${baseTime}-${orderIndex}`;
+                orderIndex += 1;
 
-            const createdAt = new Date().toISOString();
-            const deliveryInput: EstimatedDeliveryInput = {};
-            if (parsed.data.estimatedDeliveryStartAt) {
-                deliveryInput.estimatedDeliveryStartAt = parsed.data.estimatedDeliveryStartAt;
-            }
-            if (parsed.data.estimatedDeliveryEndAt) {
-                deliveryInput.estimatedDeliveryEndAt = parsed.data.estimatedDeliveryEndAt;
-            }
-            if (parsed.data.estimatedDeliveryRangeDisplay) {
-                deliveryInput.estimatedDeliveryRangeDisplay = parsed.data.estimatedDeliveryRangeDisplay;
-            }
-            const delivery = resolveEstimatedDeliveryForOrder(createdAt, deliveryInput);
+                const createdAt = new Date().toISOString();
+                const deliveryInput: EstimatedDeliveryInput = {};
+                if (parsed.data.estimatedDeliveryStartAt) {
+                    deliveryInput.estimatedDeliveryStartAt = parsed.data.estimatedDeliveryStartAt;
+                }
+                if (parsed.data.estimatedDeliveryEndAt) {
+                    deliveryInput.estimatedDeliveryEndAt = parsed.data.estimatedDeliveryEndAt;
+                }
+                if (parsed.data.estimatedDeliveryRangeDisplay) {
+                    deliveryInput.estimatedDeliveryRangeDisplay =
+                        parsed.data.estimatedDeliveryRangeDisplay;
+                }
+                const delivery = resolveEstimatedDeliveryForOrder(createdAt, deliveryInput);
 
-            const order = {
-                id,
-                buyerId,
-                sellerId,
-                status: "created" as const,
-                paymentMethod: parsed.data.paymentMethod,
-                ...(paymentReference ? { paymentReference } : {}),
-                paymentStatus: "pending" as const,
-                receiptStatus:
-                    parsed.data.paymentMethod === "online" ? ("submitted" as const) : ("none" as const),
-                totalAmount,
-                createdAt,
-                estimatedDeliveryStartAt: delivery.estimatedDeliveryStartAt,
-                estimatedDeliveryEndAt: delivery.estimatedDeliveryEndAt,
-                estimatedDeliveryRangeDisplay: delivery.estimatedDeliveryRangeDisplay,
-                ...shippingSnapshot,
-                ...(op?.receiptProofUrl ? { receiptProofUrl: op.receiptProofUrl } : {}),
-                ...(op?.sellerPaymentMethodId ? { sellerPaymentMethodId: op.sellerPaymentMethodId } : {})
-            };
-
-            db.orders.set(id, order);
-            await persistOrder(order);
-            emitOrderUpdated(order);
-
-            const orderCreatedAt = order.createdAt;
-            for (const entry of groupItems) {
-                const lineId = `oli-${randomUUID()}`;
-                const rawSelections = Array.isArray(entry.selections) ? entry.selections : [];
-                const lineItem: OrderLineItemRecord = {
-                    id: lineId,
-                    orderId: id,
-                    productId: entry.productId,
-                    quantity: entry.quantity,
-                    createdAt: orderCreatedAt,
-                    selections: snapshotSelectionsForOrderLine(entry.productId, rawSelections)
+                const order = {
+                    id,
+                    buyerId,
+                    sellerId,
+                    status: "created" as const,
+                    paymentMethod: parsed.data.paymentMethod,
+                    ...(paymentReference ? { paymentReference } : {}),
+                    paymentStatus: "pending" as const,
+                    receiptStatus:
+                        parsed.data.paymentMethod === "online"
+                            ? ("submitted" as const)
+                            : ("none" as const),
+                    totalAmount,
+                    createdAt,
+                    estimatedDeliveryStartAt: delivery.estimatedDeliveryStartAt,
+                    estimatedDeliveryEndAt: delivery.estimatedDeliveryEndAt,
+                    estimatedDeliveryRangeDisplay: delivery.estimatedDeliveryRangeDisplay,
+                    ...shippingSnapshot,
+                    ...(op?.receiptProofUrl ? { receiptProofUrl: op.receiptProofUrl } : {}),
+                    ...(op?.sellerPaymentMethodId
+                        ? { sellerPaymentMethodId: op.sellerPaymentMethodId }
+                        : {})
                 };
-                db.orderLineItems.set(lineId, lineItem);
-                await persistOrderLineItem(lineItem);
+
+                db.orders.set(id, order);
+                await persistOrder(order);
+                emitOrderUpdated(order);
+
+                const orderCreatedAt = order.createdAt;
+                for (const entry of groupItems) {
+                    const lineId = `oli-${randomUUID()}`;
+                    const rawSelections = Array.isArray(entry.selections) ? entry.selections : [];
+                    const lineItem: OrderLineItemRecord = {
+                        id: lineId,
+                        orderId: id,
+                        productId: entry.productId,
+                        quantity: entry.quantity,
+                        createdAt: orderCreatedAt,
+                        selections: snapshotSelectionsForOrderLine(entry.productId, rawSelections)
+                    };
+                    db.orderLineItems.set(lineId, lineItem);
+                    await persistOrderLineItem(lineItem);
+                }
+
+                createdOrders.push({ id, sellerId, totalAmount });
             }
 
-            createdOrders.push({ id, sellerId, totalAmount });
-        }
-
-        for (const entry of items) {
-            db.cartItems.delete(entry.id);
-            try {
-                await deleteCartItem(entry.id);
-            } catch (error) {
-                console.error("[POST /checkout] delete cart row", entry.id, error);
+            for (const entry of items) {
+                db.cartItems.delete(entry.id);
+                try {
+                    await deleteCartItem(entry.id);
+                } catch (error) {
+                    console.error("[POST /checkout] delete cart row", entry.id, error);
+                }
             }
-        }
 
-        response.status(201).json({ orders: createdOrders });
-    } catch (error) {
-        console.error("[POST /checkout]", error);
-        response.status(500).json({
-            error: error instanceof Error ? error.message : "Could not complete checkout"
-        });
-    }
+            response.status(201).json({ orders: createdOrders });
+        } catch (error) {
+            console.error("[POST /checkout]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Could not complete checkout"
+            });
+        }
     }
 );
 
@@ -3608,86 +3662,103 @@ app.get("/conversations", authenticate, authorizeRole(["buyer", "seller"]), (req
     response.json({ data: enriched });
 });
 
-app.post("/conversations", authenticate, authorizeRole(["buyer", "seller"]), async (request, response) => {
-    const schema = z.object({
-        sellerId: z.string().min(1).optional(),
-        buyerId: z.string().min(1).optional()
-    });
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-        response.status(400).json({ error: parsed.error.flatten() });
-        return;
-    }
-    const me = db.users.get(request.authUserId as string);
-    if (!me) {
-        response.status(401).json({ error: "Unauthorized" });
-        return;
-    }
-    let buyerId: string;
-    let sellerId: string;
-    if (me.role === "buyer") {
-        if (!parsed.data.sellerId) {
-            response.status(400).json({ error: "sellerId is required" });
-            return;
-        }
-        buyerId = me.id;
-        sellerId = parsed.data.sellerId;
-    } else {
-        if (!parsed.data.buyerId) {
-            response.status(400).json({ error: "buyerId is required" });
-            return;
-        }
-        buyerId = parsed.data.buyerId;
-        sellerId = me.id;
-    }
-    if (buyerId === sellerId) {
-        response.status(400).json({ error: "Invalid conversation" });
-        return;
-    }
-    const sellerUser = db.users.get(sellerId);
-    const buyerUser = db.users.get(buyerId);
-    if (!sellerUser || sellerUser.role !== "seller" || !buyerUser || buyerUser.role !== "buyer") {
-        response.status(400).json({ error: "Invalid buyer or seller" });
-        return;
-    }
-    const existing = findDirectConversation(buyerId, sellerId);
-    if (existing) {
-        response.json({ data: { id: existing.id, buyerId, sellerId, updatedAt: existing.updatedAt } });
-        return;
-    }
-    const id = `cv-${randomUUID()}`;
-    const updatedAt = new Date().toISOString();
-    const conv: ConversationRecord = { id, buyerId, sellerId, updatedAt };
-    db.conversations.set(id, conv);
-    try {
-        await persistConversation(conv);
-    } catch (error) {
-        db.conversations.delete(id);
-        response.status(500).json({
-            error: error instanceof Error ? error.message : "Failed to create conversation"
+app.post(
+    "/conversations",
+    authenticate,
+    authorizeRole(["buyer", "seller"]),
+    async (request, response) => {
+        const schema = z.object({
+            sellerId: z.string().min(1).optional(),
+            buyerId: z.string().min(1).optional()
         });
-        return;
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const me = db.users.get(request.authUserId as string);
+        if (!me) {
+            response.status(401).json({ error: "Unauthorized" });
+            return;
+        }
+        let buyerId: string;
+        let sellerId: string;
+        if (me.role === "buyer") {
+            if (!parsed.data.sellerId) {
+                response.status(400).json({ error: "sellerId is required" });
+                return;
+            }
+            buyerId = me.id;
+            sellerId = parsed.data.sellerId;
+        } else {
+            if (!parsed.data.buyerId) {
+                response.status(400).json({ error: "buyerId is required" });
+                return;
+            }
+            buyerId = parsed.data.buyerId;
+            sellerId = me.id;
+        }
+        if (buyerId === sellerId) {
+            response.status(400).json({ error: "Invalid conversation" });
+            return;
+        }
+        const sellerUser = db.users.get(sellerId);
+        const buyerUser = db.users.get(buyerId);
+        if (
+            !sellerUser ||
+            sellerUser.role !== "seller" ||
+            !buyerUser ||
+            buyerUser.role !== "buyer"
+        ) {
+            response.status(400).json({ error: "Invalid buyer or seller" });
+            return;
+        }
+        const existing = findDirectConversation(buyerId, sellerId);
+        if (existing) {
+            response.json({
+                data: { id: existing.id, buyerId, sellerId, updatedAt: existing.updatedAt }
+            });
+            return;
+        }
+        const id = `cv-${randomUUID()}`;
+        const updatedAt = new Date().toISOString();
+        const conv: ConversationRecord = { id, buyerId, sellerId, updatedAt };
+        db.conversations.set(id, conv);
+        try {
+            await persistConversation(conv);
+        } catch (error) {
+            db.conversations.delete(id);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to create conversation"
+            });
+            return;
+        }
+        response.status(201).json({ data: { id, buyerId, sellerId, updatedAt } });
     }
-    response.status(201).json({ data: { id, buyerId, sellerId, updatedAt } });
-});
+);
 
-app.get("/conversations/:id/messages", authenticate, authorizeRole(["buyer", "seller"]), (request, response) => {
-    const conversationId = z.string().min(1).parse(request.params.id);
-    const conv = db.conversations.get(conversationId);
-    const user = db.users.get(request.authUserId as string);
-    if (!conv || !user) {
-        response.status(404).json({ error: "Not found" });
-        return;
+app.get(
+    "/conversations/:id/messages",
+    authenticate,
+    authorizeRole(["buyer", "seller"]),
+    (request, response) => {
+        const conversationId = z.string().min(1).parse(request.params.id);
+        const conv = db.conversations.get(conversationId);
+        const user = db.users.get(request.authUserId as string);
+        if (!conv || !user) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        if (conv.buyerId !== user.id && conv.sellerId !== user.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        const messages = [...db.conversationMessages.values()]
+            .filter((m) => m.conversationId === conversationId)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        response.json({ data: messages });
     }
-    if (conv.buyerId !== user.id && conv.sellerId !== user.id) {
-        response.status(403).json({ error: "Forbidden" });
-        return;
-    }
-    const messages = [...db.conversationMessages.values()]
-        .filter((m) => m.conversationId === conversationId)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    response.json({ data: messages });
-});
+);
 
 app.post(
     "/conversations/:id/messages",
@@ -3949,7 +4020,9 @@ app.patch(
             return;
         }
         if (order.status === "cancelled") {
-            response.status(400).json({ error: "Cannot update shipping details on a cancelled order." });
+            response
+                .status(400)
+                .json({ error: "Cannot update shipping details on a cancelled order." });
             return;
         }
         const d = parsed.data;
@@ -4082,8 +4155,7 @@ app.post(
         }
         if (order.receiptStatus !== "resubmit_requested") {
             response.status(400).json({
-                error:
-                    "The seller has not asked for a new receipt, or this order is not waiting for one."
+                error: "The seller has not asked for a new receipt, or this order is not waiting for one."
             });
             return;
         }
@@ -4110,8 +4182,9 @@ app.get("/admin/overview", authenticate, authorizeRole(["admin"]), (_request, re
             verifiedSellers += 1;
         }
     }
-    const pendingVerifications = [...db.verifications.values()].filter((v) => v.status === "pending")
-        .length;
+    const pendingVerifications = [...db.verifications.values()].filter(
+        (v) => v.status === "pending"
+    ).length;
     const pendingLocationRequests = [...db.sellerLocationRequests.values()].filter(
         (r) => r.status === "pending"
     ).length;
@@ -4268,13 +4341,13 @@ app.get("/admin/users/:id", authenticate, authorizeRole(["admin"]), (request, re
         response.status(404).json({ error: "Not found" });
         return;
     }
-    const profile = user.role === "seller" ? db.sellerProfiles.get(id) ?? null : null;
+    const profile = user.role === "seller" ? (db.sellerProfiles.get(id) ?? null) : null;
     const paymentMethods =
         user.role === "seller"
             ? [...db.sellerPaymentMethods.values()].filter((m) => m.sellerId === id)
             : [];
     const verificationStatus =
-        user.role === "seller" ? db.sellerStatus.get(id) ?? "unsubmitted" : undefined;
+        user.role === "seller" ? (db.sellerStatus.get(id) ?? "unsubmitted") : undefined;
     const verifications =
         user.role === "seller"
             ? [...db.verifications.values()]
@@ -4292,82 +4365,97 @@ app.get("/admin/users/:id", authenticate, authorizeRole(["admin"]), (request, re
     });
 });
 
-app.post("/admin/users/:id/suspend", authenticate, authorizeRole(["admin"]), async (request, response) => {
-    const id = z.string().min(1).parse(request.params.id);
-    const actorId = request.authUserId as string;
-    if (id === actorId) {
-        response.status(400).json({ error: "Cannot suspend your own account" });
-        return;
-    }
-    const user = db.users.get(id);
-    if (!user) {
-        response.status(404).json({ error: "Not found" });
-        return;
-    }
-    if (user.suspended) {
+app.post(
+    "/admin/users/:id/suspend",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const actorId = request.authUserId as string;
+        if (id === actorId) {
+            response.status(400).json({ error: "Cannot suspend your own account" });
+            return;
+        }
+        const user = db.users.get(id);
+        if (!user) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        if (user.suspended) {
+            response.json({ ok: true });
+            return;
+        }
+        if (isSupabaseAuthReady()) {
+            const supabaseAdmin = createSupabaseAdminClient();
+            if (!supabaseAdmin) {
+                response.status(503).json({ error: "Authentication service unavailable" });
+                return;
+            }
+            const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
+                ban_duration: "876000h"
+            });
+            if (error) {
+                response.status(500).json({ error: error.message });
+                return;
+            }
+        }
+        const next: AuthUser = { ...user, suspended: true };
+        db.users.set(id, next);
         response.json({ ok: true });
-        return;
     }
-    if (isSupabaseAuthReady()) {
-        const supabaseAdmin = createSupabaseAdminClient();
-        if (!supabaseAdmin) {
-            response.status(503).json({ error: "Authentication service unavailable" });
-            return;
-        }
-        const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
-            ban_duration: "876000h"
-        });
-        if (error) {
-            response.status(500).json({ error: error.message });
-            return;
-        }
-    }
-    const next: AuthUser = { ...user, suspended: true };
-    db.users.set(id, next);
-    response.json({ ok: true });
-});
+);
 
-app.post("/admin/users/:id/unsuspend", authenticate, authorizeRole(["admin"]), async (request, response) => {
-    const id = z.string().min(1).parse(request.params.id);
-    const user = db.users.get(id);
-    if (!user) {
-        response.status(404).json({ error: "Not found" });
-        return;
-    }
-    if (isSupabaseAuthReady()) {
-        const supabaseAdmin = createSupabaseAdminClient();
-        if (!supabaseAdmin) {
-            response.status(503).json({ error: "Authentication service unavailable" });
+app.post(
+    "/admin/users/:id/unsuspend",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const user = db.users.get(id);
+        if (!user) {
+            response.status(404).json({ error: "Not found" });
             return;
         }
-        const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
-            ban_duration: "none"
-        });
-        if (error) {
-            response.status(500).json({ error: error.message });
-            return;
+        if (isSupabaseAuthReady()) {
+            const supabaseAdmin = createSupabaseAdminClient();
+            if (!supabaseAdmin) {
+                response.status(503).json({ error: "Authentication service unavailable" });
+                return;
+            }
+            const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
+                ban_duration: "none"
+            });
+            if (error) {
+                response.status(500).json({ error: error.message });
+                return;
+            }
         }
+        const next: AuthUser = {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            ...(user.fullName ? { fullName: user.fullName } : {}),
+            ...(user.profileImageUrl ? { profileImageUrl: user.profileImageUrl } : {})
+        };
+        db.users.set(id, next);
+        response.json({ ok: true });
     }
-    const next: AuthUser = {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        ...(user.fullName ? { fullName: user.fullName } : {}),
-        ...(user.profileImageUrl ? { profileImageUrl: user.profileImageUrl } : {})
-    };
-    db.users.set(id, next);
-    response.json({ ok: true });
-});
+);
 
-app.delete("/admin/users/:id", authenticate, authorizeRole(["admin"]), async (request, response) => {
-    const id = z.string().min(1).parse(request.params.id);
-    const result = await adminDeleteUserAccount(id, request.authUserId as string);
-    if (!("ok" in result)) {
-        response.status(result.status).json({ error: result.error });
-        return;
+app.delete(
+    "/admin/users/:id",
+    authenticate,
+    authorizeRole(["admin"]),
+    async (request, response) => {
+        const id = z.string().min(1).parse(request.params.id);
+        const result = await adminDeleteUserAccount(id, request.authUserId as string);
+        if (!("ok" in result)) {
+            response.status(result.status).json({ error: result.error });
+            return;
+        }
+        response.json({ ok: true });
     }
-    response.json({ ok: true });
-});
+);
 
 app.post("/maps/geocode", authenticate, (_request, response) => {
     response.json({ message: "Geocode endpoint ready for Google API integration." });
@@ -4405,9 +4493,7 @@ app.post("/ai/guidance", authenticate, authorizeRole(["buyer"]), async (request,
 });
 
 app.get("/recommendations", authenticate, (_request, response) => {
-    const data = [...db.products.values()]
-        .slice(0, 5)
-        .map((p) => rewriteProductRecordForClient(p));
+    const data = [...db.products.values()].slice(0, 5).map((p) => rewriteProductRecordForClient(p));
     response.json({ data });
 });
 
