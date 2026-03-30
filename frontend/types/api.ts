@@ -317,3 +317,7 @@ export interface SellerAssetReadUrlResponse {
   readUrl: string;
   canonicalUrl: string;
 }
+
+export interface AiGuidanceResponse {
+  answer: string;
+}

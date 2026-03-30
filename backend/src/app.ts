@@ -65,6 +65,7 @@ import {
     generateGlbUrlFromImageUrl,
     isNsfwContentRejectedError
 } from "./lib/fal-image-to-3d";
+import { generateBuyerGuidance } from "./lib/ai/gemini-guidance";
 import { hashPassword, verifyPassword } from "./lib/password";
 import {
     PRODUCT_COLORS_OPTION_NAME,
@@ -4376,7 +4377,7 @@ app.post("/maps/directions", authenticate, (_request, response) => {
     response.json({ message: "Directions endpoint ready for Google API integration." });
 });
 
-app.post("/ai/guidance", authenticate, (request, response) => {
+app.post("/ai/guidance", authenticate, authorizeRole(["buyer"]), async (request, response) => {
     const schema = z.object({ prompt: z.string().min(2) });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -4384,9 +4385,23 @@ app.post("/ai/guidance", authenticate, (request, response) => {
         return;
     }
 
-    response.json({
-        answer: `Suggestion for "${parsed.data.prompt}": filter by finish and delivery lead time.`
-    });
+    try {
+        const prompt = [
+            "You are an assistant helping a buyer make an informed decision for natural stone products.",
+            "Return 3-5 short, buyer-friendly guidance points in plain language.",
+            "Focus on what to check before buying: quality/finish, care expectations, and estimated delivery/lead time considerations.",
+            "Do not include markdown headers. Use short sentences and keep it practical.",
+            "",
+            parsed.data.prompt
+        ].join(" ");
+
+        const answer = await generateBuyerGuidance(prompt);
+        response.json({ answer });
+    } catch (error) {
+        response.status(502).json({
+            error: error instanceof Error ? error.message : "Failed to generate guidance"
+        });
+    }
 });
 
 app.get("/recommendations", authenticate, (_request, response) => {

@@ -38,6 +38,7 @@ import type {
     SellerProfileResponse,
     SellerProductCreateInput,
     SellerProductPatchInput,
+    AiGuidanceResponse,
     AdminUsersListResponse,
     VerificationQueueResponse,
     VerificationStatusResponse,
@@ -696,5 +697,12 @@ export function createBuyerAssetUploadUrl(
     return apiFetch<VerificationUploadTarget>("/buyer/assets/upload-url", {
         method: "POST",
         body: JSON.stringify(kind === "profile" ? { filename } : { filename, kind })
+    });
+}
+
+export function getAiGuidance(prompt: string) {
+    return apiFetch<AiGuidanceResponse>("/ai/guidance", {
+        method: "POST",
+        body: JSON.stringify({ prompt })
     });
 }

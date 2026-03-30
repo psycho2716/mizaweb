@@ -1,6 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 import type { AuthUser } from "./auth";
-import type { Product, SellerPublicProfile } from "./product";
+import type { Product, ProductDetail, SellerPublicProfile } from "./product";
 
 /** Public shop catalog: Lithos-style grid, filters, sort, pagination. */
 export interface ProductsListingClientProps {
@@ -121,4 +121,20 @@ export interface AdminSellerLocationMapProps {
   mapFrameClassName?: string;
   /** Set false when the parent already provides a section title (e.g. public storefront). */
   showSectionLabel?: boolean;
+}
+
+/** Buyer preference used to tailor AI guidance prompts (stored client-side for now). */
+export type BuyerGuidanceCategory = string;
+
+export interface BuyerGuidanceOnboardingModalProps {
+  open: boolean;
+  selectedCategory: BuyerGuidanceCategory;
+  onSelectCategory: (category: BuyerGuidanceCategory) => void;
+  onSaveAndContinue: () => void;
+  onSkip: () => void;
+}
+
+export interface BuyerAIGuidanceClientProps {
+  enabled: boolean;
+  product: ProductDetail;
 }

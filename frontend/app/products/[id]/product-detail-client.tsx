@@ -7,6 +7,7 @@ import { ChevronRight, MessageCircle, Quote, ShoppingBag, Star, Store } from "lu
 import { toast } from "sonner";
 import { ProductViewModeToggle } from "@/components/product/product-view-mode-toggle";
 import { ProductModelPreview } from "@/components/seller/product-model-preview";
+import { BuyerAIGuidanceClient } from "@/components/buyer/buyer-ai-guidance-client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiRequestError } from "@/lib/api/client";
@@ -800,6 +801,10 @@ export function ProductDetailClient({ product }: ProductDetailClientProps) {
                                 with the seller if needed.
                             </p>
                         </div>
+                    ) : null}
+
+                    {viewer?.role === "buyer" && token ? (
+                        <BuyerAIGuidanceClient enabled={true} product={product} />
                     ) : null}
 
                     <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">

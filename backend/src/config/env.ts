@@ -16,6 +16,10 @@ const envSchema = z.object({
     JWT_SECRET: z.string().min(16).default("replace-with-a-secure-secret"),
     GOOGLE_MAPS_API_KEY: z.string().optional(),
     GOOGLE_DIRECTIONS_API_KEY: z.string().optional(),
+    /** Google Gemini API key (used by POST /ai/guidance). */
+    GEMINI_API_KEY: z.string().optional(),
+    /** Gemini model name for `generateContent` (can be overridden in env). */
+    GEMINI_MODEL: z.string().optional().default("gemini-2.5-flash"),
     FAL_API_KEY: z.string().optional(),
     /** Reject 3D generation when fal-ai/imageutils/nsfw reports probability >= this (0–1). Higher = stricter. */
     FAL_NSFW_THRESHOLD: z.coerce.number().min(0).max(1).default(0.72),
