@@ -19,6 +19,9 @@ function resolveSectionTitle(pathname: string): string {
     return "Edit product";
   }
   if (pathname.startsWith("/seller/listings")) return "Products";
+  if (pathname.startsWith("/seller/orders/") && pathname !== "/seller/orders") {
+    return "Fulfillment";
+  }
   if (pathname.startsWith("/seller/orders")) return "Orders";
   if (pathname.startsWith("/seller/messages")) return "Messages";
   if (pathname.startsWith("/seller/profile") || pathname.startsWith("/seller/payment-methods")) {

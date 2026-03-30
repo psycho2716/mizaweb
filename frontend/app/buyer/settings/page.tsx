@@ -15,6 +15,7 @@ import {
     updateBuyerPassword,
     updateBuyerProfile
 } from "@/lib/api/endpoints";
+import { clearClientAuthStorage } from "@/lib/auth/persist-client-session";
 import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import type { AuthUser } from "@/types";
@@ -67,6 +68,10 @@ export default function BuyerSettingsPage() {
     const [loadError, setLoadError] = useState(false);
     const [fullName, setFullName] = useState("");
     const [profileImageUrl, setProfileImageUrl] = useState("");
+    const [contactNumber, setContactNumber] = useState("");
+    const [shippingAddressLine, setShippingAddressLine] = useState("");
+    const [shippingCity, setShippingCity] = useState("");
+    const [shippingPostalCode, setShippingPostalCode] = useState("");
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
     const [deletePassword, setDeletePassword] = useState("");
@@ -80,6 +85,10 @@ export default function BuyerSettingsPage() {
                     setMe(res.user);
                     setFullName(res.user.fullName ?? "");
                     setProfileImageUrl(res.user.profileImageUrl ?? "");
+                    setContactNumber(res.user.contactNumber ?? "");
+                    setShippingAddressLine(res.user.shippingAddressLine ?? "");
+                    setShippingCity(res.user.shippingCity ?? "");
+                    setShippingPostalCode(res.user.shippingPostalCode ?? "");
                     setLoadError(false);
                     try {
                         window.localStorage.setItem("miza_user", JSON.stringify(res.user));
@@ -166,7 +175,8 @@ export default function BuyerSettingsPage() {
                                     About you
                                 </h2>
                                 <p className="mt-1 text-xs text-(--muted)">
-                                    How you appear to sellers in messages and order updates.
+                                    How you appear to sellers, default shipping details for checkout, and order
+                                    updates.
                                 </p>
                                 <div className="mt-6 grid gap-5 sm:grid-cols-2">
                                     <LithosUnderlineField
@@ -192,19 +202,63 @@ export default function BuyerSettingsPage() {
                                             placeholder="https://"
                                         />
                                     </div>
+                                    <LithosUnderlineField
+                                        id="buyer-contactNumber"
+                                        label="Contact number"
+                                        value={contactNumber}
+                                        onChange={(e) =>
+                                            setContactNumber(e.target.value.replace(/\D/g, "").slice(0, 15))
+                                        }
+                                        placeholder="09XXXXXXXXX"
+                                        autoComplete="tel"
+                                    />
+                                    <div className="hidden sm:block" aria-hidden />
+                                    <div className="sm:col-span-2">
+                                        <LithosUnderlineField
+                                            id="buyer-shippingAddressLine"
+                                            label="Street address"
+                                            value={shippingAddressLine}
+                                            onChange={(e) => setShippingAddressLine(e.target.value)}
+                                            autoComplete="street-address"
+                                        />
+                                    </div>
+                                    <LithosUnderlineField
+                                        id="buyer-shippingCity"
+                                        label="City / municipality"
+                                        value={shippingCity}
+                                        onChange={(e) => setShippingCity(e.target.value)}
+                                        autoComplete="address-level2"
+                                    />
+                                    <LithosUnderlineField
+                                        id="buyer-shippingPostalCode"
+                                        label="Postal code"
+                                        value={shippingPostalCode}
+                                        onChange={(e) =>
+                                            setShippingPostalCode(
+                                                e.target.value.replace(/\D/g, "").slice(0, 6)
+                                            )
+                                        }
+                                        autoComplete="postal-code"
+                                    />
                                 </div>
                                 <Button
                                     type="button"
                                     className={`${btnPrimary} mt-8`}
                                     onClick={async () => {
                                         try {
+                                            const contactDigits = contactNumber.replace(/\D/g, "");
+                                            const postalDigits = shippingPostalCode.replace(/\D/g, "");
                                             const res = await updateBuyerProfile({
                                                 ...(fullName.trim()
                                                     ? { fullName: fullName.trim() }
                                                     : {}),
                                                 ...(profileImageUrl.trim()
                                                     ? { profileImageUrl: profileImageUrl.trim() }
-                                                    : {})
+                                                    : {}),
+                                                contactNumber: contactDigits,
+                                                shippingAddressLine,
+                                                shippingCity,
+                                                shippingPostalCode: postalDigits
                                             });
                                             setMe(res.data);
                                             try {
@@ -340,8 +394,7 @@ export default function BuyerSettingsPage() {
                                             onClick={async () => {
                                                 try {
                                                     await deleteBuyerAccount(deletePassword);
-                                                    window.localStorage.removeItem("miza_token");
-                                                    window.localStorage.removeItem("miza_user");
+                                                    clearClientAuthStorage();
                                                     await fetch("/api/auth/session", { method: "DELETE" });
                                                     window.dispatchEvent(new Event("miza-auth-change"));
                                                     window.location.href = "/";

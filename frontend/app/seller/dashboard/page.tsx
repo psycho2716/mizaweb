@@ -49,6 +49,11 @@ function orderStatusPresentation(status: Order["status"]): { label: string; clas
                 label: "DELIVERED",
                 className: "border border-emerald-600/30 bg-emerald-600/10 text-emerald-200"
             };
+        case "cancelled":
+            return {
+                label: "CANCELLED",
+                className: "border border-red-500/40 bg-red-500/15 text-red-200"
+            };
     }
 }
 
@@ -377,7 +382,7 @@ export default function SellerDashboardPage() {
                                             you&apos;ve received the payment
                                         </p>
                                         <Link
-                                            href={`/seller/orders?order=${encodeURIComponent(order.id)}`}
+                                            href={`/seller/orders/${encodeURIComponent(order.id)}`}
                                             className="mt-2 inline-block text-[10px] font-semibold text-(--accent) hover:underline"
                                         >
                                             Review order →

@@ -19,6 +19,7 @@ import {
     submitSellerVerification
 } from "@/lib/api/endpoints";
 import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
+import { persistClientAuthSession } from "@/lib/auth/persist-client-session";
 import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { buyerRegisterSchema, sellerRegisterSchema } from "@/types";
 
@@ -85,14 +86,11 @@ function RegisterPageContent() {
     async function completeRegistration(values: BuyerRegisterFormValues) {
         try {
             const result = await registerAccount(values.email, values.password, values.role, {});
-            localStorage.setItem("miza_token", result.token);
-            localStorage.setItem("miza_user", JSON.stringify(result.user));
-            await fetch("/api/auth/session", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token: result.token, role: result.user.role })
+            await persistClientAuthSession({
+                token: result.token,
+                user: result.user,
+                refreshToken: result.refreshToken
             });
-            window.dispatchEvent(new Event("miza-auth-change"));
 
             const pending = parseSafeCallbackUrl(searchParams.get("callbackUrl"));
             const dest =
@@ -133,14 +131,11 @@ function RegisterPageContent() {
                 shopLongitude: values.shopLongitude
             });
 
-            localStorage.setItem("miza_token", result.token);
-            localStorage.setItem("miza_user", JSON.stringify(result.user));
-            await fetch("/api/auth/session", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token: result.token, role: result.user.role })
+            await persistClientAuthSession({
+                token: result.token,
+                user: result.user,
+                refreshToken: result.refreshToken
             });
-            window.dispatchEvent(new Event("miza-auth-change"));
 
             const target = await createVerificationUploadUrl(permitFile.name);
             const putRes = await putToSignedUploadUrl(target.uploadUrl, permitFile);

@@ -26,6 +26,7 @@ import {
     updateSellerPassword,
     updateSellerProfile
 } from "@/lib/api/endpoints";
+import { clearClientAuthStorage } from "@/lib/auth/persist-client-session";
 import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
 import type { SellerPaymentMethod, SellerPublicProfile } from "@/types";
@@ -774,8 +775,7 @@ export default function SellerProfilePage() {
                                                                 await deleteSellerAccount(
                                                                     deletePassword
                                                                 );
-                                                                localStorage.removeItem("miza_token");
-                                                                localStorage.removeItem("miza_user");
+                                                                clearClientAuthStorage();
                                                                 await fetch("/api/auth/session", {
                                                                     method: "DELETE"
                                                                 });

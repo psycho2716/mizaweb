@@ -31,11 +31,19 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         return <div className="mizaweb-stitch-app">{children}</div>;
     }
 
+    const isBuyerOrderSuccessRoute = pathname.startsWith("/buyer/orders/success");
+    const isBuyerOrdersListRoute = pathname === "/buyer/orders";
+    const isBuyerReviewsRoute = pathname.startsWith("/buyer/reviews");
+
     return (
         <div className="mizaweb-stitch-app">
             <SiteHeader />
             <div className="flex flex-1 flex-col">{children}</div>
-            <PublicFooter />
+            {!isBuyerOrderSuccessRoute &&
+            !isBuyerOrdersListRoute &&
+            !isBuyerReviewsRoute ? (
+                <PublicFooter />
+            ) : null}
         </div>
     );
 }

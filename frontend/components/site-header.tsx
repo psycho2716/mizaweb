@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useCallback } from "react";
 import { useCartItemCount } from "@/hooks/use-cart-item-count";
 import { useMizaStoredUser } from "@/hooks/use-miza-stored-user";
+import { clearClientAuthStorage } from "@/lib/auth/persist-client-session";
 import { getAppName, cn } from "@/lib/utils";
 import type { UserProfileMenuProps } from "@/types";
 
@@ -82,8 +83,7 @@ export function SiteHeader() {
     const { user, refresh } = useMizaStoredUser();
 
     const handleLogout = useCallback(async () => {
-        window.localStorage.removeItem("miza_token");
-        window.localStorage.removeItem("miza_user");
+        clearClientAuthStorage();
         try {
             await fetch("/api/auth/session", { method: "DELETE" });
         } catch {
@@ -125,6 +125,12 @@ export function SiteHeader() {
                                 className={navLinkClass(pathname.startsWith("/buyer/orders"))}
                             >
                                 My orders
+                            </Link>
+                            <Link
+                                href="/buyer/reviews"
+                                className={navLinkClass(pathname.startsWith("/buyer/reviews"))}
+                            >
+                                My reviews
                             </Link>
                             <Link
                                 href="/buyer/messages"

@@ -64,3 +64,25 @@ export function parseAndValidateCartSelections(
     }
     return { ok: true, selections: out };
 }
+
+/**
+ * Adds `optionLabel` from the current catalog so order line `selections` stay readable
+ * if the seller renames or removes customization options after purchase.
+ */
+export function snapshotSelectionsForOrderLine(
+    productId: string,
+    selections: CartItemSelection[]
+): CartItemSelection[] {
+    const options = [...db.customizationOptions.values()].filter((o) => o.productId === productId);
+    const byId = new Map(options.map((o) => [o.id, o]));
+    return selections.map((s) => {
+        const opt = byId.get(s.optionId);
+        const name = opt?.name?.trim();
+        const base: CartItemSelection = { optionId: s.optionId, value: s.value };
+        if (name) {
+            return { ...base, optionLabel: name };
+        }
+        const existing = s.optionLabel?.trim();
+        return existing ? { ...base, optionLabel: existing } : base;
+    });
+}

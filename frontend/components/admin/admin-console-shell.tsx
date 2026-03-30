@@ -3,6 +3,7 @@
 import { ClipboardCheck, LogOut, MapPin, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback } from "react";
+import { clearClientAuthStorage } from "@/lib/auth/persist-client-session";
 import { cn, getAppName } from "@/lib/utils";
 import type { AdminConsoleShellProps } from "@/types";
 
@@ -21,8 +22,7 @@ export function AdminConsoleShell({ children, activeNav = "verifications" }: Adm
   const appName = getAppName();
 
   const handleLogout = useCallback(async () => {
-    window.localStorage.removeItem("miza_token");
-    window.localStorage.removeItem("miza_user");
+    clearClientAuthStorage();
     try {
       await fetch("/api/auth/session", { method: "DELETE" });
     } catch {

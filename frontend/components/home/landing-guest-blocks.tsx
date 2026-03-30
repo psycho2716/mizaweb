@@ -28,8 +28,8 @@ export function LandingGuestAudienceSection() {
             <article className="rounded-sm border border-(--border) bg-(--surface) p-8">
                 <h3 className="text-3xl font-semibold text-foreground">For buyers</h3>
                 <p className="mt-3 max-w-sm text-sm leading-7 text-(--muted)">
-                    Discover stone décor, gifts, and everyday pieces, compare prices in ₱, and order
-                    from verified sellers with order tracking and chat.
+                    Discover stone products, gifts, and everyday products. Compare prices, and order
+                    from verified sellers with order tracking and message sellers.
                 </p>
                 <Link
                     href="/products"
@@ -41,8 +41,8 @@ export function LandingGuestAudienceSection() {
             <article className="rounded-sm border border-(--border) bg-(--surface) p-8">
                 <h3 className="text-3xl font-semibold text-foreground">For sellers</h3>
                 <p className="mt-3 max-w-sm text-sm leading-7 text-(--muted)">
-                    List stone goods, manage orders and payouts, and talk to buyers from one merchant
-                    workspace.
+                    List stone goods, manage orders and payouts, and talk to buyers from one
+                    merchant workspace.
                 </p>
                 <Link
                     href="/auth/register"

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
 import { loginWithEmailPassword } from "@/lib/api/endpoints";
+import { persistClientAuthSession } from "@/lib/auth/persist-client-session";
 import { loginSchema } from "@/types";
 
 type LoginFormValues = z.infer<typeof loginSchema>;
@@ -54,14 +55,11 @@ function LoginPageContent() {
     async function handleLogin(values: LoginFormValues) {
         try {
             const result = await loginWithEmailPassword(values.email, values.password);
-            localStorage.setItem("miza_token", result.token);
-            localStorage.setItem("miza_user", JSON.stringify(result.user));
-            await fetch("/api/auth/session", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token: result.token, role: result.user.role })
+            await persistClientAuthSession({
+                token: result.token,
+                user: result.user,
+                refreshToken: result.refreshToken
             });
-            window.dispatchEvent(new Event("miza-auth-change"));
 
             const userRole = result.user.role;
             const pending =

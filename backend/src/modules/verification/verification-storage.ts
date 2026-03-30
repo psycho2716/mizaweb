@@ -3,6 +3,7 @@ import {
   createSupabaseAdminClient,
   isSupabaseConfigured,
 } from "../../integrations/supabase/client";
+import { rewriteLocalSupabaseUrl } from "../../lib/supabase-asset-url";
 
 export interface VerificationUploadTarget {
   path: string;
@@ -253,10 +254,14 @@ export async function generateVerificationUploadTarget(
     publicUrl = storagePublicObjectUrl(bucket, path);
   }
 
+  const resolvedPublicUrl = publicUrl
+    ? (rewriteLocalSupabaseUrl(publicUrl) ?? publicUrl)
+    : undefined;
+
   return {
     path,
     uploadUrl: data.signedUrl,
-    ...(publicUrl ? { publicUrl } : {}),
+    ...(resolvedPublicUrl ? { publicUrl: resolvedPublicUrl } : {}),
     expiresIn: 3600,
     provider: "supabase",
   };

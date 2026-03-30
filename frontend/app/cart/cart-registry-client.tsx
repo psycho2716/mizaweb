@@ -336,7 +336,7 @@ export function CartRegistryClient() {
                                 </dl>
                                 <div className="mt-6 border-t border-white/10 pt-6">
                                     <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
-                                        Total investment
+                                        Total Payment Amount
                                     </p>
                                     <p className="mt-1 text-2xl font-bold tabular-nums text-(--accent)">
                                         {formatPeso(subtotal)}

@@ -17,6 +17,7 @@ function footerLinksForUser(user: AuthUser): { label: string; href: string }[] {
         return [
             { label: "Marketplace", href: "/products" },
             { label: "My orders", href: "/buyer/orders" },
+            { label: "My reviews", href: "/buyer/reviews" },
             { label: "Messages", href: "/buyer/messages" }
         ];
     }

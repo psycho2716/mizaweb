@@ -65,6 +65,15 @@ describe("auth + cart + checkout + orders flow", () => {
     expect(orderDetailResponse.status).toBe(200);
     expect(orderDetailResponse.body.data.order.id).toBe(orderId);
     expect(Array.isArray(orderDetailResponse.body.data.lineItems)).toBe(true);
+    const placed = orderDetailResponse.body.data.order as {
+      estimatedDeliveryStartAt?: string;
+      estimatedDeliveryEndAt?: string;
+      estimatedDeliveryRangeDisplay?: string;
+    };
+    expect(typeof placed.estimatedDeliveryStartAt).toBe("string");
+    expect(typeof placed.estimatedDeliveryEndAt).toBe("string");
+    expect(typeof placed.estimatedDeliveryRangeDisplay).toBe("string");
+    expect(placed.estimatedDeliveryRangeDisplay!.length).toBeGreaterThan(3);
   });
 
   it("merges guest cart into buyer cart on GET /cart when both token and guest session match", async () => {

@@ -1,3 +1,6 @@
+import { getStoredRefreshToken, persistClientAuthSession } from "@/lib/auth/persist-client-session";
+import type { AuthLoginResponse } from "@/types";
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /** Thrown when `apiFetch` receives a non-OK response; includes optional `code` from JSON body (e.g. NSFW_REJECTED). */
@@ -51,7 +54,7 @@ function resolveBrowserAuthToken(): string | null {
     return null;
 }
 
-export async function apiFetch<T>(path: string, options?: RequestOptions): Promise<T> {
+function buildApiFetchHeaders(options?: RequestOptions): Headers {
     const headers = new Headers(options?.headers);
     headers.set("Content-Type", "application/json");
     if (options?.userId) {
@@ -80,40 +83,98 @@ export async function apiFetch<T>(path: string, options?: RequestOptions): Promi
             }
         }
     }
+    return headers;
+}
 
-    const response = await fetch(`${BACKEND_URL}${path}`, {
-        ...options,
-        headers,
-        cache: "no-store"
-    });
-
-    let payload: unknown;
-    try {
-        payload = await response.json();
-    } catch {
-        payload = {};
+async function tryRefreshAuthSession(): Promise<boolean> {
+    const rt = getStoredRefreshToken();
+    if (!rt) {
+        return false;
     }
+    try {
+        const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refreshToken: rt }),
+            cache: "no-store"
+        });
+        const payload = (await res.json().catch(() => ({}))) as Partial<AuthLoginResponse>;
+        if (!res.ok || typeof payload.token !== "string" || !payload.user) {
+            return false;
+        }
+        await persistClientAuthSession({
+            token: payload.token,
+            user: payload.user,
+            refreshToken: payload.refreshToken
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
 
-    if (!response.ok) {
-        let message = "Request failed";
-        let code: string | undefined;
-        let cooldownEndsAt: string | undefined;
-        if (payload && typeof payload === "object") {
-            const body = payload as { error?: unknown; code?: unknown; cooldownEndsAt?: unknown };
-            if (typeof body.error === "string") {
-                message = body.error;
-            } else if (body.error !== undefined) {
-                message = "Something went wrong. Please try again.";
-            }
-            if (typeof body.code === "string") {
-                code = body.code;
-            }
-            if (typeof body.cooldownEndsAt === "string") {
-                cooldownEndsAt = body.cooldownEndsAt;
+function shouldAttemptSessionRefresh(path: string, status: number, attempt: number): boolean {
+    return (
+        status === 401 &&
+        attempt === 0 &&
+        typeof window !== "undefined" &&
+        path !== "/auth/refresh" &&
+        path !== "/auth/login" &&
+        path !== "/auth/register"
+    );
+}
+
+export async function apiFetch<T>(path: string, options?: RequestOptions): Promise<T> {
+    let lastStatus = 500;
+    let lastPayload: unknown = {};
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const headers = buildApiFetchHeaders(options);
+        const response = await fetch(`${BACKEND_URL}${path}`, {
+            ...options,
+            headers,
+            cache: "no-store"
+        });
+        lastStatus = response.status;
+
+        let payload: unknown;
+        try {
+            payload = await response.json();
+        } catch {
+            payload = {};
+        }
+        lastPayload = payload;
+
+        if (response.ok) {
+            return payload as T;
+        }
+
+        if (shouldAttemptSessionRefresh(path, response.status, attempt)) {
+            const refreshed = await tryRefreshAuthSession();
+            if (refreshed) {
+                continue;
             }
         }
-        throw new ApiRequestError(message, response.status, code, cooldownEndsAt);
+
+        break;
     }
 
-    return payload as T;
+    let message = "Request failed";
+    let code: string | undefined;
+    let cooldownEndsAt: string | undefined;
+    if (lastPayload && typeof lastPayload === "object") {
+        const body = lastPayload as { error?: unknown; code?: unknown; cooldownEndsAt?: unknown };
+        if (typeof body.error === "string") {
+            message = body.error;
+        } else if (body.error !== undefined) {
+            message = "Something went wrong. Please try again.";
+        }
+        if (typeof body.code === "string") {
+            code = body.code;
+        }
+        if (typeof body.cooldownEndsAt === "string") {
+            cooldownEndsAt = body.cooldownEndsAt;
+        }
+    }
+    throw new ApiRequestError(message, lastStatus, code, cooldownEndsAt);
 }

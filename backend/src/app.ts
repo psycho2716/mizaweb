@@ -10,7 +10,7 @@ import { z } from "zod";
 import { env } from "./config/env";
 import { authorizeRole } from "./middleware/authorize-role";
 import { authenticate, resolveOptionalAuthUserId } from "./middleware/authenticate";
-import { parseAndValidateCartSelections } from "./lib/cart-selections";
+import { parseAndValidateCartSelections, snapshotSelectionsForOrderLine } from "./lib/cart-selections";
 import {
     cartSelectionsEqual,
     maxPurchasableUnits,
@@ -32,6 +32,7 @@ import {
     deleteProduct,
     deleteProductMedia,
     deleteProductMediaByProduct,
+    deleteProductReviewById,
     deleteSellerLocationRequestsBySellerId,
     deleteSellerPaymentMethod,
     deleteSellerProfileBySellerId,
@@ -66,7 +67,23 @@ import {
     PRODUCT_DIMENSIONS_OPTION_NAME,
     syncProductDimensionAndColorOptions
 } from "./lib/product-customization";
+import { buildBuyerOrdersSummary } from "./lib/buyer-orders-summary";
+import { buildSellerOrdersSummary } from "./lib/seller-orders-summary";
+import { buildBuyerReviewsDashboard } from "./lib/buyer-reviews-dashboard";
+import {
+    resolveEstimatedDeliveryForOrder,
+    type EstimatedDeliveryInput
+} from "./lib/estimated-delivery";
+import {
+    checkoutShippingSnapshotFromBody,
+    type CheckoutShippingBody
+} from "./lib/checkout-shipping-snapshot";
 import { getReviewEligibilityForBuyer } from "./lib/review-eligibility";
+import {
+    rewriteLocalSupabaseUrl,
+    rewriteProductMediaForClient,
+    rewriteProductRecordForClient
+} from "./lib/supabase-asset-url";
 import { emitDirectMessage, emitOrderMessage, emitOrderUpdated } from "./lib/realtime";
 import {
     createSignedVerificationDownloadUrl,
@@ -182,7 +199,8 @@ function sellerReviewAggregate(sellerId: string): {
 
 function firstProductThumbnailUrl(productId: string): string | undefined {
     const media = [...db.productMedia.values()].filter((m) => m.productId === productId);
-    return [...media].sort((a, b) => a.id.localeCompare(b.id))[0]?.url;
+    const raw = [...media].sort((a, b) => a.id.localeCompare(b.id))[0]?.url;
+    return rewriteLocalSupabaseUrl(raw);
 }
 
 function reviewerDisplayLabel(buyerId: string): string {
@@ -698,6 +716,52 @@ app.post("/auth/login", authLimiter, async (request, response) => {
     response.json({ token, user });
 });
 
+app.post("/auth/refresh", authLimiter, async (request, response) => {
+    const schema = z.object({
+        refreshToken: z.string().min(10).max(4096)
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+        response.status(400).json({ error: parsed.error.flatten() });
+        return;
+    }
+    if (!isSupabaseAuthReady()) {
+        response.status(501).json({ error: "Session refresh is not available" });
+        return;
+    }
+    const anon = createSupabaseAnonClient();
+    if (!anon) {
+        response.status(503).json({ error: "Authentication service unavailable" });
+        return;
+    }
+    const { data, error } = await anon.auth.refreshSession({
+        refresh_token: parsed.data.refreshToken
+    });
+    if (error || !data.session || !data.user) {
+        response.status(401).json({
+            error: error?.message ?? "Session expired. Please sign in again."
+        });
+        return;
+    }
+    await syncFromSupabaseIfStale();
+    const user = db.users.get(data.user.id);
+    if (!user) {
+        response.status(403).json({
+            error: "Account profile is missing. Contact support."
+        });
+        return;
+    }
+    if (user.suspended) {
+        response.status(403).json({ error: "Account suspended" });
+        return;
+    }
+    response.json({
+        token: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        user
+    });
+});
+
 app.post("/auth/logout", authenticate, (_request, response) => {
     response.json({ ok: true });
 });
@@ -723,7 +787,7 @@ app.get("/sellers/:id/profile", async (request, response) => {
     const storefrontProducts = [...db.products.values()]
         .filter((product) => product.sellerId === id && product.isPublished)
         .map((p) => ({
-            ...p,
+            ...rewriteProductRecordForClient(p),
             thumbnailUrl: firstProductThumbnailUrl(p.id)
         }))
         .sort((a, b) => {
@@ -1256,7 +1320,11 @@ app.delete(
 app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (request, response) => {
     const schema = z.object({
         fullName: z.string().min(2).max(120).optional(),
-        profileImageUrl: z.string().url().optional()
+        profileImageUrl: z.string().url().optional(),
+        contactNumber: z.string().max(32).optional(),
+        shippingAddressLine: z.string().max(255).optional(),
+        shippingCity: z.string().max(120).optional(),
+        shippingPostalCode: z.string().max(12).optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -1264,19 +1332,125 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
         return;
     }
     const buyerId = request.authUserId as string;
-    const user = db.users.get(buyerId);
-    if (!user || user.role !== "buyer") {
+    const buyerRow = db.users.get(buyerId);
+    if (!buyerRow || buyerRow.role !== "buyer") {
         response.status(404).json({ error: "User not found" });
         return;
     }
-    const previousFullName = user.fullName;
-    const previousPic = user.profileImageUrl;
+    const buyer = buyerRow;
+
+    if (parsed.data.contactNumber !== undefined) {
+        const digits = parsed.data.contactNumber.replace(/\D/g, "");
+        if (digits.length === 0) {
+            /* clear */
+        } else if (digits.length < 10) {
+            response.status(400).json({
+                error: "Contact number must be at least 10 digits, or leave empty to clear."
+            });
+            return;
+        }
+    }
+    if (parsed.data.shippingAddressLine !== undefined) {
+        const t = parsed.data.shippingAddressLine.trim();
+        if (t.length > 0 && t.length < 3) {
+            response.status(400).json({ error: "Street address must be at least 3 characters." });
+            return;
+        }
+    }
+    if (parsed.data.shippingCity !== undefined) {
+        const t = parsed.data.shippingCity.trim();
+        if (t.length > 0 && t.length < 2) {
+            response.status(400).json({ error: "City must be at least 2 characters." });
+            return;
+        }
+    }
+    if (parsed.data.shippingPostalCode !== undefined) {
+        const digits = parsed.data.shippingPostalCode.replace(/\D/g, "");
+        if (digits.length > 0 && digits.length < 4) {
+            response.status(400).json({ error: "Postal code must be at least 4 digits." });
+            return;
+        }
+    }
+
+    const previousFullName = buyer.fullName;
+    const previousPic = buyer.profileImageUrl;
+    const previousContact = buyer.contactNumber;
+    const previousAddr = buyer.shippingAddressLine;
+    const previousCity = buyer.shippingCity;
+    const previousPostal = buyer.shippingPostalCode;
+
     if (parsed.data.fullName !== undefined) {
-        user.fullName = parsed.data.fullName;
+        buyer.fullName = parsed.data.fullName;
     }
     if (parsed.data.profileImageUrl !== undefined) {
-        user.profileImageUrl = parsed.data.profileImageUrl;
+        buyer.profileImageUrl = parsed.data.profileImageUrl;
     }
+    if (parsed.data.contactNumber !== undefined) {
+        const digits = parsed.data.contactNumber.replace(/\D/g, "");
+        if (digits.length === 0) {
+            delete buyer.contactNumber;
+        } else {
+            buyer.contactNumber = digits;
+        }
+    }
+    if (parsed.data.shippingAddressLine !== undefined) {
+        const t = parsed.data.shippingAddressLine.trim();
+        if (t.length === 0) {
+            delete buyer.shippingAddressLine;
+        } else {
+            buyer.shippingAddressLine = t;
+        }
+    }
+    if (parsed.data.shippingCity !== undefined) {
+        const t = parsed.data.shippingCity.trim();
+        if (t.length === 0) {
+            delete buyer.shippingCity;
+        } else {
+            buyer.shippingCity = t;
+        }
+    }
+    if (parsed.data.shippingPostalCode !== undefined) {
+        const digits = parsed.data.shippingPostalCode.replace(/\D/g, "");
+        if (digits.length === 0) {
+            delete buyer.shippingPostalCode;
+        } else {
+            buyer.shippingPostalCode = digits;
+        }
+    }
+
+    function restoreBuyerProfileSnapshot(): void {
+        if (previousFullName !== undefined) {
+            buyer.fullName = previousFullName;
+        } else {
+            delete buyer.fullName;
+        }
+        if (previousPic !== undefined) {
+            buyer.profileImageUrl = previousPic;
+        } else {
+            delete buyer.profileImageUrl;
+        }
+        if (previousContact !== undefined) {
+            buyer.contactNumber = previousContact;
+        } else {
+            delete buyer.contactNumber;
+        }
+        if (previousAddr !== undefined) {
+            buyer.shippingAddressLine = previousAddr;
+        } else {
+            delete buyer.shippingAddressLine;
+        }
+        if (previousCity !== undefined) {
+            buyer.shippingCity = previousCity;
+        } else {
+            delete buyer.shippingCity;
+        }
+        if (previousPostal !== undefined) {
+            buyer.shippingPostalCode = previousPostal;
+        } else {
+            delete buyer.shippingPostalCode;
+        }
+    }
+
     try {
         if (isSupabaseAuthReady()) {
             const supabase = createSupabaseAdminClient();
@@ -1289,13 +1463,41 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
             }
             const meta: Record<string, unknown> = {
                 ...((existing.user.user_metadata ?? {}) as Record<string, unknown>),
-                role: user.role
+                role: buyer.role
             };
             if (parsed.data.fullName !== undefined) {
                 meta.full_name = parsed.data.fullName;
             }
             if (parsed.data.profileImageUrl !== undefined) {
                 meta.profile_image_url = parsed.data.profileImageUrl;
+            }
+            if (parsed.data.contactNumber !== undefined) {
+                if (buyer.contactNumber) {
+                    meta.contact_number = buyer.contactNumber;
+                } else {
+                    delete meta.contact_number;
+                }
+            }
+            if (parsed.data.shippingAddressLine !== undefined) {
+                if (buyer.shippingAddressLine) {
+                    meta.shipping_address_line = buyer.shippingAddressLine;
+                } else {
+                    delete meta.shipping_address_line;
+                }
+            }
+            if (parsed.data.shippingCity !== undefined) {
+                if (buyer.shippingCity) {
+                    meta.shipping_city = buyer.shippingCity;
+                } else {
+                    delete meta.shipping_city;
+                }
+            }
+            if (parsed.data.shippingPostalCode !== undefined) {
+                if (buyer.shippingPostalCode) {
+                    meta.shipping_postal_code = buyer.shippingPostalCode;
+                } else {
+                    delete meta.shipping_postal_code;
+                }
             }
             const { error: upErr } = await supabase.auth.admin.updateUserById(buyerId, {
                 user_metadata: meta
@@ -1304,25 +1506,16 @@ app.patch("/buyer/profile", authenticate, authorizeRole(["buyer"]), async (reque
                 throw new Error(upErr.message);
             }
         }
-        db.users.set(buyerId, user);
+        db.users.set(buyerId, buyer);
     } catch (error) {
-        if (previousFullName !== undefined) {
-            user.fullName = previousFullName;
-        } else {
-            delete user.fullName;
-        }
-        if (previousPic !== undefined) {
-            user.profileImageUrl = previousPic;
-        } else {
-            delete user.profileImageUrl;
-        }
+        restoreBuyerProfileSnapshot();
         console.error("[buyer/profile]", error);
         response.status(500).json({
             error: error instanceof Error ? error.message : "Failed to update profile"
         });
         return;
     }
-    response.json({ ok: true, data: user });
+    response.json({ ok: true, data: buyer });
 });
 
 app.post(
@@ -1345,6 +1538,47 @@ app.post(
             parsed.data.kind === "payment-receipt" ? "payment-receipt" : "profile"
         );
         response.status(201).json(target);
+    }
+);
+
+app.get("/buyer/orders/summary", authenticate, authorizeRole(["buyer"]), (request, response) => {
+    const buyerId = request.authUserId as string;
+    response.json({ data: buildBuyerOrdersSummary(buyerId) });
+});
+
+app.get("/seller/orders/summary", authenticate, authorizeRole(["seller"]), (request, response) => {
+    const sellerId = request.authUserId as string;
+    response.json({ data: buildSellerOrdersSummary(sellerId) });
+});
+
+app.get("/buyer/reviews", authenticate, authorizeRole(["buyer"]), (request, response) => {
+    const buyerId = request.authUserId as string;
+    const dashboard = buildBuyerReviewsDashboard(buyerId);
+    response.json({ data: dashboard });
+});
+
+app.delete(
+    "/buyer/reviews/:reviewId",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response) => {
+        const reviewId = z.string().min(1).parse(request.params.reviewId);
+        const review = db.productReviews.get(reviewId);
+        if (!review || review.buyerId !== (request.authUserId as string)) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        db.productReviews.delete(reviewId);
+        try {
+            await deleteProductReviewById(reviewId);
+        } catch (error) {
+            db.productReviews.set(reviewId, review);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Failed to delete review"
+            });
+            return;
+        }
+        response.json({ ok: true });
     }
 );
 
@@ -1734,7 +1968,10 @@ app.get("/seller/analytics", authenticate, authorizeRole(["seller"]), (request, 
     const toShipOrders = orders.filter((entry) => entry.status === "processing").length;
     const deliveredOrders = orders.filter((entry) => entry.status === "delivered").length;
     const unpaidOnlineOrders = orders.filter(
-        (entry) => entry.paymentMethod === "online" && entry.paymentStatus !== "paid"
+        (entry) =>
+            entry.status !== "cancelled" &&
+            entry.paymentMethod === "online" &&
+            entry.paymentStatus !== "paid"
     ).length;
     const products = [...db.products.values()].filter((entry) => entry.sellerId === sellerId);
     const publishedProducts = products.filter((entry) => entry.isPublished).length;
@@ -1757,7 +1994,7 @@ app.get("/seller/products", authenticate, authorizeRole(["seller"]), (request, r
     const data = [...db.products.values()]
         .filter((row) => row.sellerId === sellerId)
         .map((row) => ({
-            ...row,
+            ...rewriteProductRecordForClient(row),
             thumbnailUrl: firstProductThumbnailUrl(row.id)
         }));
     response.json({ data });
@@ -1774,7 +2011,15 @@ app.get("/seller/products/:id", authenticate, authorizeRole(["seller"]), (reques
     const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
     const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
     const reviewSummary = productReviewSummaryForProduct(id);
-    response.json({ data: { ...product, media, options, rules, reviewSummary } });
+    response.json({
+        data: {
+            ...rewriteProductRecordForClient(product),
+            media: rewriteProductMediaForClient(media),
+            options,
+            rules,
+            reviewSummary
+        }
+    });
 });
 
 const createProductBodySchema = z
@@ -1985,7 +2230,7 @@ app.patch("/products/:id", authenticate, authorizeRole(["seller"]), async (reque
         });
         return;
     }
-    response.json({ ok: true, data: product });
+    response.json({ ok: true, data: rewriteProductRecordForClient(product) });
 });
 
 app.post("/products/:id/publish", authenticate, authorizeRole(["seller"]), async (request, response) => {
@@ -2049,7 +2294,7 @@ app.get("/products", searchLimiter, (request, response) => {
         rows = rows.filter((p) => p.sellerId === sellerFilter);
     }
     const data = rows.map((p) => ({
-        ...p,
+        ...rewriteProductRecordForClient(p),
         thumbnailUrl: firstProductThumbnailUrl(p.id)
     }));
     response.json({ data });
@@ -2066,7 +2311,15 @@ app.get("/products/:id", (_request, response) => {
     const options = [...db.customizationOptions.values()].filter((entry) => entry.productId === id);
     const rules = [...db.customizationRules.values()].filter((entry) => entry.productId === id);
     const reviewSummary = productReviewSummaryForProduct(id);
-    response.json({ data: { ...product, media, options, rules, reviewSummary } });
+    response.json({
+        data: {
+            ...rewriteProductRecordForClient(product),
+            media: rewriteProductMediaForClient(media),
+            options,
+            rules,
+            reviewSummary
+        }
+    });
 });
 
 app.get("/products/:id/reviews", (request, response) => {
@@ -2705,7 +2958,11 @@ app.delete("/cart/items/:itemId", async (request, response) => {
     response.json({ ok: true });
 });
 
-app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, response) => {
+app.post(
+    "/checkout",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response): Promise<void> => {
     const onlinePaymentEntry = z.object({
         sellerId: z.string().min(1),
         sellerPaymentMethodId: z.string().min(1),
@@ -2714,7 +2971,16 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, re
     const schema = z.object({
         paymentMethod: z.enum(["cash", "online"]),
         paymentReference: z.string().max(500).optional(),
-        onlinePayments: z.array(onlinePaymentEntry).optional()
+        onlinePayments: z.array(onlinePaymentEntry).optional(),
+        estimatedDeliveryStartAt: z.string().optional(),
+        estimatedDeliveryEndAt: z.string().optional(),
+        estimatedDeliveryRangeDisplay: z.string().max(220).optional(),
+        shippingRecipientName: z.string().max(120).optional(),
+        shippingContactNumber: z.string().max(40).optional(),
+        shippingAddressLine: z.string().max(255).optional(),
+        shippingCity: z.string().max(120).optional(),
+        shippingPostalCode: z.string().max(20).optional(),
+        deliveryNotes: z.string().max(2000).optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -2795,82 +3061,158 @@ app.post("/checkout", authenticate, authorizeRole(["buyer"]), async (request, re
         }
     }
 
-    const baseTime = Date.now();
-    const createdOrders: Array<{ id: string; sellerId: string; totalAmount: number }> = [];
-    let orderIndex = 0;
-
-    for (const sellerId of sellerIds) {
-        const groupItems = groups.get(sellerId);
-        if (!groupItems?.length) {
+    const qtyByProduct = new Map<string, number>();
+    for (const item of items) {
+        qtyByProduct.set(item.productId, (qtyByProduct.get(item.productId) ?? 0) + item.quantity);
+    }
+    for (const [productId, qty] of qtyByProduct) {
+        const p = db.products.get(productId);
+        if (!p || p.madeToOrder) {
             continue;
         }
-        const totalAmount = groupItems.reduce((sum, item) => {
-            const product = db.products.get(item.productId);
-            return sum + (product?.basePrice ?? 0) * item.quantity;
-        }, 0);
+        const stock = p.stockQuantity ?? 0;
+        if (stock < qty) {
+            response.status(400).json({
+                error: `Insufficient stock for "${p.title}". Available: ${stock}, requested: ${qty}.`
+            });
+            return;
+        }
+    }
 
-        const op =
-            parsed.data.paymentMethod === "online"
-                ? parsed.data.onlinePayments!.find((o) => o.sellerId === sellerId)
-                : undefined;
-        const method = op ? db.sellerPaymentMethods.get(op.sellerPaymentMethodId) : undefined;
-        const paymentReference =
-            parsed.data.paymentMethod === "online" && method
-                ? `${method.methodName} · ${method.accountName}`
-                : parsed.data.paymentReference;
+    try {
+        const baseTime = Date.now();
+        const createdOrders: Array<{ id: string; sellerId: string; totalAmount: number }> = [];
+        let orderIndex = 0;
 
-        const id = `o-${baseTime}-${orderIndex}`;
-        orderIndex += 1;
+        const shippingBody: CheckoutShippingBody = {};
+        if (parsed.data.shippingRecipientName) {
+            shippingBody.shippingRecipientName = parsed.data.shippingRecipientName;
+        }
+        if (parsed.data.shippingContactNumber) {
+            shippingBody.shippingContactNumber = parsed.data.shippingContactNumber;
+        }
+        if (parsed.data.shippingAddressLine) {
+            shippingBody.shippingAddressLine = parsed.data.shippingAddressLine;
+        }
+        if (parsed.data.shippingCity) {
+            shippingBody.shippingCity = parsed.data.shippingCity;
+        }
+        if (parsed.data.shippingPostalCode) {
+            shippingBody.shippingPostalCode = parsed.data.shippingPostalCode;
+        }
+        if (parsed.data.deliveryNotes) {
+            shippingBody.deliveryNotes = parsed.data.deliveryNotes;
+        }
+        const shippingSnapshot = checkoutShippingSnapshotFromBody(shippingBody);
 
-        const order = {
-            id,
-            buyerId,
-            sellerId,
-            status: "created" as const,
-            paymentMethod: parsed.data.paymentMethod,
-            ...(paymentReference ? { paymentReference } : {}),
-            paymentStatus: "pending" as const,
-            receiptStatus:
-                parsed.data.paymentMethod === "online" ? ("submitted" as const) : ("none" as const),
-            totalAmount,
-            createdAt: new Date().toISOString(),
-            ...(op?.receiptProofUrl ? { receiptProofUrl: op.receiptProofUrl } : {}),
-            ...(op?.sellerPaymentMethodId ? { sellerPaymentMethodId: op.sellerPaymentMethodId } : {})
-        };
+        for (const sellerId of sellerIds) {
+            const groupItems = groups.get(sellerId);
+            if (!groupItems?.length) {
+                continue;
+            }
+            const totalAmount = groupItems.reduce((sum, item) => {
+                const product = db.products.get(item.productId);
+                return sum + (product?.basePrice ?? 0) * item.quantity;
+            }, 0);
 
-        db.orders.set(id, order);
-        persistOrder(order);
-        emitOrderUpdated(order);
+            const op =
+                parsed.data.paymentMethod === "online"
+                    ? parsed.data.onlinePayments!.find((o) => o.sellerId === sellerId)
+                    : undefined;
+            const method = op ? db.sellerPaymentMethods.get(op.sellerPaymentMethodId) : undefined;
+            const paymentReference =
+                parsed.data.paymentMethod === "online" && method
+                    ? `${method.methodName} · ${method.accountName}`
+                    : parsed.data.paymentReference;
 
-        const orderCreatedAt = order.createdAt;
-        for (const entry of groupItems) {
-            const lineId = `oli-${randomUUID()}`;
-            const lineItem: OrderLineItemRecord = {
-                id: lineId,
-                orderId: id,
-                productId: entry.productId,
-                quantity: entry.quantity,
-                createdAt: orderCreatedAt,
-                selections: entry.selections
+            const id = `o-${baseTime}-${orderIndex}`;
+            orderIndex += 1;
+
+            const createdAt = new Date().toISOString();
+            const deliveryInput: EstimatedDeliveryInput = {};
+            if (parsed.data.estimatedDeliveryStartAt) {
+                deliveryInput.estimatedDeliveryStartAt = parsed.data.estimatedDeliveryStartAt;
+            }
+            if (parsed.data.estimatedDeliveryEndAt) {
+                deliveryInput.estimatedDeliveryEndAt = parsed.data.estimatedDeliveryEndAt;
+            }
+            if (parsed.data.estimatedDeliveryRangeDisplay) {
+                deliveryInput.estimatedDeliveryRangeDisplay = parsed.data.estimatedDeliveryRangeDisplay;
+            }
+            const delivery = resolveEstimatedDeliveryForOrder(createdAt, deliveryInput);
+
+            const order = {
+                id,
+                buyerId,
+                sellerId,
+                status: "created" as const,
+                paymentMethod: parsed.data.paymentMethod,
+                ...(paymentReference ? { paymentReference } : {}),
+                paymentStatus: "pending" as const,
+                receiptStatus:
+                    parsed.data.paymentMethod === "online" ? ("submitted" as const) : ("none" as const),
+                totalAmount,
+                createdAt,
+                estimatedDeliveryStartAt: delivery.estimatedDeliveryStartAt,
+                estimatedDeliveryEndAt: delivery.estimatedDeliveryEndAt,
+                estimatedDeliveryRangeDisplay: delivery.estimatedDeliveryRangeDisplay,
+                ...shippingSnapshot,
+                ...(op?.receiptProofUrl ? { receiptProofUrl: op.receiptProofUrl } : {}),
+                ...(op?.sellerPaymentMethodId ? { sellerPaymentMethodId: op.sellerPaymentMethodId } : {})
             };
-            db.orderLineItems.set(lineId, lineItem);
-            persistOrderLineItem(lineItem);
+
+            db.orders.set(id, order);
+            await persistOrder(order);
+            emitOrderUpdated(order);
+
+            const orderCreatedAt = order.createdAt;
+            for (const entry of groupItems) {
+                const lineId = `oli-${randomUUID()}`;
+                const rawSelections = Array.isArray(entry.selections) ? entry.selections : [];
+                const lineItem: OrderLineItemRecord = {
+                    id: lineId,
+                    orderId: id,
+                    productId: entry.productId,
+                    quantity: entry.quantity,
+                    createdAt: orderCreatedAt,
+                    selections: snapshotSelectionsForOrderLine(entry.productId, rawSelections)
+                };
+                db.orderLineItems.set(lineId, lineItem);
+                await persistOrderLineItem(lineItem);
+            }
+
+            createdOrders.push({ id, sellerId, totalAmount });
         }
 
-        createdOrders.push({ id, sellerId, totalAmount });
-    }
-
-    for (const entry of items) {
-        db.cartItems.delete(entry.id);
-        try {
-            await deleteCartItem(entry.id);
-        } catch (error) {
-            console.error("[POST /checkout] delete cart row", entry.id, error);
+        for (const [productId, qty] of qtyByProduct) {
+            const p = db.products.get(productId);
+            if (!p || p.madeToOrder) {
+                continue;
+            }
+            const nextStock = (p.stockQuantity ?? 0) - qty;
+            const updated = { ...p, stockQuantity: nextStock };
+            db.products.set(productId, updated);
+            await persistProduct(updated);
         }
-    }
 
-    response.status(201).json({ orders: createdOrders });
-});
+        for (const entry of items) {
+            db.cartItems.delete(entry.id);
+            try {
+                await deleteCartItem(entry.id);
+            } catch (error) {
+                console.error("[POST /checkout] delete cart row", entry.id, error);
+            }
+        }
+
+        response.status(201).json({ orders: createdOrders });
+    } catch (error) {
+        console.error("[POST /checkout]", error);
+        response.status(500).json({
+            error: error instanceof Error ? error.message : "Could not complete checkout"
+        });
+    }
+    }
+);
 
 app.get("/orders", authenticate, (request, response) => {
     const user = db.users.get(request.authUserId as string);
@@ -2900,8 +3242,50 @@ app.get("/orders/:id", authenticate, (request, response) => {
         return;
     }
     const lineItems = [...db.orderLineItems.values()].filter((line) => line.orderId === id);
-    response.json({ data: { order, lineItems } });
+    let buyerDisplayName: string | undefined;
+    if (user.role === "seller" || user.role === "admin") {
+        const buyer = db.users.get(order.buyerId);
+        const name = buyer?.fullName?.trim();
+        buyerDisplayName = name || buyer?.email || order.buyerId;
+    }
+    response.json({
+        data: {
+            order,
+            lineItems,
+            ...(buyerDisplayName !== undefined ? { buyerDisplayName } : {})
+        }
+    });
 });
+
+app.get(
+    "/orders/:id/payment-receipt-read-url",
+    authenticate,
+    async (request, response): Promise<void> => {
+        const orderId = z.string().min(1).parse(request.params.id);
+        const order = db.orders.get(orderId);
+        const user = db.users.get(request.authUserId as string);
+        if (!order || !user) {
+            response.status(404).json({ error: "Not found" });
+            return;
+        }
+        if (user.role !== "admin" && order.buyerId !== user.id && order.sellerId !== user.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (!order.receiptProofUrl?.trim()) {
+            response.status(404).json({ error: "No payment receipt for this order." });
+            return;
+        }
+        const readUrl = await resolveVerificationDocsReadUrl(order.receiptProofUrl);
+        if (!readUrl) {
+            response.status(503).json({
+                error: "Could not generate a view link for this receipt."
+            });
+            return;
+        }
+        response.json({ data: { readUrl } });
+    }
+);
 
 app.get("/orders/:id/messages", authenticate, (request, response) => {
     const orderId = z.string().min(1).parse(request.params.id);
@@ -2926,7 +3310,7 @@ app.post(
     "/orders/:id/messages",
     authenticate,
     authorizeRole(["buyer", "seller"]),
-    (request, response) => {
+    async (request, response): Promise<void> => {
         const orderId = z.string().min(1).parse(request.params.id);
         const schema = z.object({
             body: z.string().min(1).max(2000)
@@ -2958,9 +3342,167 @@ app.post(
             createdAt: new Date().toISOString()
         };
         db.orderMessages.set(message.id, message);
-        persistOrderMessage(message);
+        try {
+            await persistOrderMessage(message);
+        } catch (error) {
+            db.orderMessages.delete(message.id);
+            console.error("[POST /orders/:id/messages] persistOrderMessage", error);
+            response.status(500).json({
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Could not save message. Check that the database is available."
+            });
+            return;
+        }
         emitOrderMessage(message);
         response.status(201).json({ data: message });
+    }
+);
+
+app.post(
+    "/orders/:id/cancel-by-seller",
+    authenticate,
+    authorizeRole(["seller", "admin"]),
+    async (request, response): Promise<void> => {
+        const orderId = z.string().min(1).parse(request.params.id);
+        const schema = z.object({
+            reason: z
+                .string()
+                .min(10, "Please provide at least 10 characters.")
+                .max(2000)
+                .transform((s) => s.trim())
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const order = db.orders.get(orderId);
+        const actor = db.users.get(request.authUserId as string);
+        if (!order || !actor) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        if (actor.role === "seller" && order.sellerId !== actor.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.status === "delivered" || order.status === "cancelled") {
+            response.status(400).json({ error: "This order cannot be cancelled." });
+            return;
+        }
+        const previousStatus = order.status;
+        const previousCancellationReason = order.cancellationReason;
+        order.status = "cancelled";
+        order.cancellationReason = parsed.data.reason;
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            order.status = previousStatus;
+            if (previousCancellationReason !== undefined) {
+                order.cancellationReason = previousCancellationReason;
+            } else {
+                delete order.cancellationReason;
+            }
+            console.error("[POST /orders/:id/cancel-by-seller]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Could not cancel order"
+            });
+            return;
+        }
+        const message = {
+            id: `m-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            orderId,
+            senderId: actor.id,
+            body: `This order was cancelled.\n\nReason:\n${parsed.data.reason}`,
+            createdAt: new Date().toISOString()
+        };
+        db.orderMessages.set(message.id, message);
+        try {
+            await persistOrderMessage(message);
+        } catch (err) {
+            console.error("[POST /orders/:id/cancel-by-seller] persistOrderMessage", err);
+        }
+        emitOrderMessage(message);
+        emitOrderUpdated(order);
+        response.json({ ok: true, status: order.status });
+    }
+);
+
+app.post(
+    "/orders/:id/cancel-by-buyer",
+    authenticate,
+    authorizeRole(["buyer", "admin"]),
+    async (request, response): Promise<void> => {
+        const orderId = z.string().min(1).parse(request.params.id);
+        const schema = z.object({
+            reason: z
+                .string()
+                .min(10, "Please provide at least 10 characters.")
+                .max(2000)
+                .transform((s) => s.trim())
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const order = db.orders.get(orderId);
+        const actor = db.users.get(request.authUserId as string);
+        if (!order || !actor) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        if (actor.role === "buyer" && order.buyerId !== actor.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.status === "delivered" || order.status === "cancelled") {
+            response.status(400).json({ error: "This order cannot be cancelled." });
+            return;
+        }
+        if (order.status === "shipped") {
+            response.status(400).json({
+                error: "This order is already on the way. Contact your seller if you need help."
+            });
+            return;
+        }
+        const previousStatus = order.status;
+        const previousCancellationReason = order.cancellationReason;
+        order.status = "cancelled";
+        order.cancellationReason = parsed.data.reason;
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            order.status = previousStatus;
+            if (previousCancellationReason !== undefined) {
+                order.cancellationReason = previousCancellationReason;
+            } else {
+                delete order.cancellationReason;
+            }
+            console.error("[POST /orders/:id/cancel-by-buyer]", error);
+            response.status(500).json({
+                error: error instanceof Error ? error.message : "Could not cancel order"
+            });
+            return;
+        }
+        const message = {
+            id: `m-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            orderId,
+            senderId: actor.id,
+            body: `I cancelled this order.\n\nReason:\n${parsed.data.reason}`,
+            createdAt: new Date().toISOString()
+        };
+        db.orderMessages.set(message.id, message);
+        try {
+            await persistOrderMessage(message);
+        } catch (err) {
+            console.error("[POST /orders/:id/cancel-by-buyer] persistOrderMessage", err);
+        }
+        emitOrderMessage(message);
+        emitOrderUpdated(order);
+        response.json({ ok: true, status: order.status });
     }
 );
 
@@ -3134,9 +3676,24 @@ app.post(
     "/orders/:id/status",
     authenticate,
     authorizeRole(["seller", "admin"]),
-    (request, response) => {
+    async (request, response): Promise<void> => {
+        const orderQualityChecklistItemSchema = z.object({
+            id: z.string().min(1).max(120),
+            label: z
+                .string()
+                .max(500)
+                .transform((s) => s.trim())
+                .refine((s) => s.length > 0, {
+                    message: "Each checklist line needs text."
+                }),
+            checked: z.boolean()
+        });
+        const orderQualityChecklistSchema = z.object({
+            items: z.array(orderQualityChecklistItemSchema).min(1).max(30)
+        });
         const schema = z.object({
-            status: z.enum(["confirmed", "processing", "shipped", "delivered"])
+            status: z.enum(["confirmed", "processing", "shipped", "delivered"]),
+            qualityChecklist: orderQualityChecklistSchema.optional()
         });
         const parsed = schema.safeParse(request.body);
         if (!parsed.success) {
@@ -3154,20 +3711,56 @@ app.post(
             response.status(403).json({ error: "Forbidden" });
             return;
         }
+        if (order.status === "cancelled") {
+            response.status(400).json({ error: "Cannot change status of a cancelled order." });
+            return;
+        }
+        if (
+            parsed.data.qualityChecklist !== undefined &&
+            !(order.status === "created" && parsed.data.status === "confirmed")
+        ) {
+            response.status(400).json({
+                error: "qualityChecklist is only accepted when confirming a new order."
+            });
+            return;
+        }
         const transitions: Record<string, string[]> = {
             created: ["confirmed"],
             confirmed: ["processing", "shipped"],
             processing: ["shipped"],
             shipped: ["delivered"],
-            delivered: []
+            delivered: [],
+            cancelled: []
         };
         const allowed = transitions[order.status] ?? [];
         if (!allowed.includes(parsed.data.status) && parsed.data.status !== order.status) {
             response.status(400).json({ error: "Invalid status transition" });
             return;
         }
+        if (order.status === "created" && parsed.data.status === "confirmed") {
+            const qc = parsed.data.qualityChecklist;
+            if (!qc) {
+                response.status(400).json({
+                    error: "qualityChecklist is required when confirming an order."
+                });
+                return;
+            }
+            if (!qc.items.every((row) => row.checked)) {
+                response.status(400).json({
+                    error: "Complete every quality checklist item before confirming this order."
+                });
+                return;
+            }
+            order.qualityChecklist = qc;
+        }
         order.status = parsed.data.status;
-        persistOrder(order);
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            console.error("[POST /orders/:id/status] persistOrder", error);
+            response.status(500).json({ error: "Could not save order" });
+            return;
+        }
         emitOrderUpdated(order);
         response.json({ ok: true, status: order.status });
     }
@@ -3177,7 +3770,7 @@ app.post(
     "/orders/:id/payment-status",
     authenticate,
     authorizeRole(["seller", "admin"]),
-    (request, response) => {
+    async (request, response): Promise<void> => {
         const schema = z.object({
             paymentStatus: z.enum(["pending", "paid"])
         });
@@ -3197,6 +3790,10 @@ app.post(
             response.status(403).json({ error: "Forbidden" });
             return;
         }
+        if (order.status === "cancelled") {
+            response.status(400).json({ error: "Cannot update payment on a cancelled order." });
+            return;
+        }
         if (order.paymentMethod === "cash" && parsed.data.paymentStatus === "pending") {
             response.status(400).json({ error: "Cash payments cannot be reverted to pending." });
             return;
@@ -3207,7 +3804,13 @@ app.post(
                 order.paymentMethod === "online" && order.paymentReference ? "approved" : "none";
             delete order.receiptRequestNote;
         }
-        persistOrder(order);
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            console.error("[POST /orders/:id/payment-status] persistOrder", error);
+            response.status(500).json({ error: "Could not save order" });
+            return;
+        }
         emitOrderUpdated(order);
         response.json({ ok: true, paymentStatus: order.paymentStatus });
     }
@@ -3217,7 +3820,7 @@ app.post(
     "/orders/:id/request-receipt",
     authenticate,
     authorizeRole(["seller", "admin"]),
-    (request, response) => {
+    async (request, response): Promise<void> => {
         const schema = z.object({
             note: z.string().min(5).max(500)
         });
@@ -3241,10 +3844,74 @@ app.post(
             response.status(400).json({ error: "Receipt request is only for online payments." });
             return;
         }
+        if (order.status === "cancelled") {
+            response.status(400).json({ error: "Cannot request receipt on a cancelled order." });
+            return;
+        }
         order.paymentStatus = "pending";
         order.receiptStatus = "resubmit_requested";
         order.receiptRequestNote = parsed.data.note;
-        persistOrder(order);
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            console.error("[POST /orders/:id/request-receipt] persistOrder", error);
+            response.status(500).json({ error: "Could not save order" });
+            return;
+        }
+        emitOrderUpdated(order);
+        response.json({ ok: true, receiptStatus: order.receiptStatus });
+    }
+);
+
+app.post(
+    "/orders/:id/buyer-payment-receipt",
+    authenticate,
+    authorizeRole(["buyer"]),
+    async (request, response): Promise<void> => {
+        const schema = z.object({
+            receiptProofUrl: z.string().url()
+        });
+        const parsed = schema.safeParse(request.body);
+        if (!parsed.success) {
+            response.status(400).json({ error: parsed.error.flatten() });
+            return;
+        }
+        const orderId = z.string().min(1).parse(request.params.id);
+        const order = db.orders.get(orderId);
+        const user = db.users.get(request.authUserId as string);
+        if (!order || !user) {
+            response.status(404).json({ error: "Order not found" });
+            return;
+        }
+        if (order.buyerId !== user.id) {
+            response.status(403).json({ error: "Forbidden" });
+            return;
+        }
+        if (order.paymentMethod !== "online") {
+            response.status(400).json({ error: "This order does not use online payment." });
+            return;
+        }
+        if (order.status === "cancelled") {
+            response.status(400).json({ error: "Cannot update receipt on a cancelled order." });
+            return;
+        }
+        if (order.receiptStatus !== "resubmit_requested") {
+            response.status(400).json({
+                error:
+                    "The seller has not asked for a new receipt, or this order is not waiting for one."
+            });
+            return;
+        }
+        order.receiptProofUrl = parsed.data.receiptProofUrl;
+        order.receiptStatus = "submitted";
+        delete order.receiptRequestNote;
+        try {
+            await persistOrder(order);
+        } catch (error) {
+            console.error("[POST /orders/:id/buyer-payment-receipt] persistOrder", error);
+            response.status(500).json({ error: "Could not save order" });
+            return;
+        }
         emitOrderUpdated(order);
         response.json({ ok: true, receiptStatus: order.receiptStatus });
     }
@@ -3539,7 +4206,10 @@ app.post("/ai/guidance", authenticate, (request, response) => {
 });
 
 app.get("/recommendations", authenticate, (_request, response) => {
-    response.json({ data: [...db.products.values()].slice(0, 5) });
+    const data = [...db.products.values()]
+        .slice(0, 5)
+        .map((p) => rewriteProductRecordForClient(p));
+    response.json({ data });
 });
 
 app.get("/public/highlights", (_request, response) => {
@@ -3547,7 +4217,7 @@ app.get("/public/highlights", (_request, response) => {
     const featured = publishedProducts.filter((p) => p.isFeatured);
     const rest = publishedProducts.filter((p) => !p.isFeatured);
     const topProducts = [...featured, ...rest].slice(0, 6).map((p) => ({
-        ...p,
+        ...rewriteProductRecordForClient(p),
         thumbnailUrl: firstProductThumbnailUrl(p.id)
     }));
     const sellerCounter = new Map<string, number>();

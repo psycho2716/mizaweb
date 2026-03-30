@@ -109,10 +109,10 @@ export default async function Home() {
                 <div className="flex items-center justify-between gap-4">
                     <div>
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-(--accent)">
-                            Chapter 02
+                            Products
                         </p>
                         <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                            Featured pieces
+                            Featured Products
                         </h2>
                     </div>
                     <Link
@@ -158,7 +158,7 @@ export default async function Home() {
                                 </p>
                                 <p className="line-clamp-2 text-xs text-(--muted)">
                                     {product.description ||
-                                        "Hand-finished stone piece from a verified seller."}
+                                        "Hand-finished stone products from verified sellers."}
                                 </p>
                                 <p className="text-xs font-semibold text-(--accent)">
                                     {formatPeso(product.basePrice)}

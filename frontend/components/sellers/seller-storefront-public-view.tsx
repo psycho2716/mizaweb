@@ -346,7 +346,7 @@ export function SellerStorefrontPublicView({ profile }: SellerStorefrontPublicVi
                         Contact Details
                     </p>
                     <h2 className="mt-2 text-xl font-bold tracking-tight sm:text-2xl">
-                        Direct lines
+                        Direct Orders and Messages
                     </h2>
                     <dl className="mt-8 grid gap-8 sm:grid-cols-3">
                         <div>

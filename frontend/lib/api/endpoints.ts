@@ -7,6 +7,9 @@ import type {
     AuthLoginResponse,
     AuthMeResponse,
     BuyerProfileUpdateResponse,
+    UpdateBuyerProfilePayload,
+    BuyerOrdersSummaryResponse,
+    BuyerReviewsResponse,
     CartItemResponse,
     CartItemSelection,
     CartResponse,
@@ -31,6 +34,7 @@ import type {
     ListPaginationMeta,
     SellerLocationChangeRequest,
     SellerPublicProfile,
+    SellerOrdersSummaryResponse,
     SellerProfileResponse,
     SellerProductCreateInput,
     SellerProductPatchInput,
@@ -39,7 +43,8 @@ import type {
     VerificationStatusResponse,
     VerificationSubmitResponse,
     SellerAssetReadUrlResponse,
-    VerificationUploadTarget
+    VerificationUploadTarget,
+    OrderQualityChecklist
 } from "@/types";
 
 export function loginWithEmailPassword(email: string, password: string) {
@@ -241,6 +246,16 @@ export function getProductReviewEligibility(productId: string) {
     return apiFetch<ProductReviewEligibilityResponse>(`/products/${productId}/review-eligibility`);
 }
 
+export function getBuyerReviews() {
+    return apiFetch<BuyerReviewsResponse>("/buyer/reviews");
+}
+
+export function deleteBuyerReview(reviewId: string) {
+    return apiFetch<{ ok: boolean }>(`/buyer/reviews/${encodeURIComponent(reviewId)}`, {
+        method: "DELETE"
+    });
+}
+
 export function listConversations() {
     return apiFetch<ConversationsListResponse>("/conversations");
 }
@@ -381,6 +396,15 @@ export function checkoutCart(payload: {
     paymentMethod: "cash" | "online";
     paymentReference?: string;
     onlinePayments?: CheckoutOnlinePaymentLine[];
+    estimatedDeliveryStartAt?: string;
+    estimatedDeliveryEndAt?: string;
+    estimatedDeliveryRangeDisplay?: string;
+    shippingRecipientName?: string;
+    shippingContactNumber?: string;
+    shippingAddressLine?: string;
+    shippingCity?: string;
+    shippingPostalCode?: string;
+    deliveryNotes?: string;
 }) {
     ensureGuestSessionId();
     return apiFetch<CheckoutResponse>("/checkout", {
@@ -433,8 +457,22 @@ export function getOrderById(orderId: string) {
     return apiFetch<OrderDetailResponse>(`/orders/${encodeURIComponent(orderId)}`);
 }
 
+export function getOrderPaymentReceiptReadUrl(orderId: string) {
+    return apiFetch<{ data: { readUrl: string } }>(
+        `/orders/${encodeURIComponent(orderId)}/payment-receipt-read-url`
+    );
+}
+
 export function getOrders() {
     return apiFetch<OrdersResponse>("/orders");
+}
+
+export function getBuyerOrdersSummary() {
+    return apiFetch<BuyerOrdersSummaryResponse>("/buyer/orders/summary");
+}
+
+export function getSellerOrdersSummary() {
+    return apiFetch<SellerOrdersSummaryResponse>("/seller/orders/summary");
 }
 
 export function getOrderMessages(orderId: string) {
@@ -452,11 +490,28 @@ export function sendOrderMessage(orderId: string, body: string) {
 
 export function updateOrderStatus(
     orderId: string,
-    status: "confirmed" | "processing" | "shipped" | "delivered"
+    payload: {
+        status: "confirmed" | "processing" | "shipped" | "delivered";
+        qualityChecklist?: OrderQualityChecklist;
+    }
 ) {
     return apiFetch<{ ok: boolean; status: string }>(`/orders/${orderId}/status`, {
         method: "POST",
-        body: JSON.stringify({ status })
+        body: JSON.stringify(payload)
+    });
+}
+
+export function cancelOrderBySeller(orderId: string, reason: string) {
+    return apiFetch<{ ok: boolean; status: string }>(`/orders/${orderId}/cancel-by-seller`, {
+        method: "POST",
+        body: JSON.stringify({ reason })
+    });
+}
+
+export function cancelOrderByBuyer(orderId: string, reason: string) {
+    return apiFetch<{ ok: boolean; status: string }>(`/orders/${orderId}/cancel-by-buyer`, {
+        method: "POST",
+        body: JSON.stringify({ reason })
     });
 }
 
@@ -472,6 +527,16 @@ export function requestReceiptResubmission(orderId: string, note: string) {
         method: "POST",
         body: JSON.stringify({ note })
     });
+}
+
+export function submitBuyerOrderPaymentReceipt(orderId: string, receiptProofUrl: string) {
+    return apiFetch<{ ok: boolean; receiptStatus: string }>(
+        `/orders/${encodeURIComponent(orderId)}/buyer-payment-receipt`,
+        {
+            method: "POST",
+            body: JSON.stringify({ receiptProofUrl })
+        }
+    );
 }
 
 export function getSellerProfile() {
@@ -603,7 +668,7 @@ export function deleteBuyerAccount(password: string) {
     });
 }
 
-export function updateBuyerProfile(payload: { fullName?: string; profileImageUrl?: string }) {
+export function updateBuyerProfile(payload: UpdateBuyerProfilePayload) {
     return apiFetch<BuyerProfileUpdateResponse>("/buyer/profile", {
         method: "PATCH",
         body: JSON.stringify(payload)

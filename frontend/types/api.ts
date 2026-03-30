@@ -4,7 +4,13 @@ export interface ApiError {
 
 import type { AuthUser } from "./auth";
 import type { ConversationThread, DirectMessage } from "./messaging";
-import type { CartItemSelection, Order, OrderLineItem, OrderMessage } from "./order";
+import type {
+  CartItemSelection,
+  Order,
+  OrderLineItem,
+  OrderMessage,
+  OrderQualityChecklist
+} from "./order";
 import type { Product } from "./product";
 import type { ProductReview } from "./review";
 import type { AdminUserListItem, AdminVerificationItem } from "./admin";
@@ -35,6 +41,16 @@ export interface AuthMeResponse {
 export interface BuyerProfileUpdateResponse {
   ok: boolean;
   data: AuthUser;
+}
+
+/** PATCH /buyer/profile — optional fields; empty strings clear stored contact/shipping metadata where supported. */
+export interface UpdateBuyerProfilePayload {
+  fullName?: string;
+  profileImageUrl?: string;
+  contactNumber?: string;
+  shippingAddressLine?: string;
+  shippingCity?: string;
+  shippingPostalCode?: string;
 }
 
 export interface LandingHighlightsResponse {
@@ -119,6 +135,8 @@ export interface OrderDetailResponse {
   data: {
     order: Order;
     lineItems: OrderLineItem[];
+    /** Present when the viewer is the seller or an admin. */
+    buyerDisplayName?: string;
   };
 }
 
@@ -128,6 +146,99 @@ export interface OrdersResponse {
 
 export interface OrderMessagesResponse {
   data: OrderMessage[];
+}
+
+/** Buyer dashboard: posted reviews and products from delivered orders still unrated. */
+export interface BuyerReviewSubmittedItem {
+  id: string;
+  productId: string;
+  rating: number;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  productTitle: string;
+  thumbnailUrl: string | null;
+}
+
+export interface BuyerReviewPendingItem {
+  productId: string;
+  productTitle: string;
+  thumbnailUrl: string | null;
+  orderReferenceAt: string;
+}
+
+export interface BuyerReviewsDashboardData {
+  submitted: BuyerReviewSubmittedItem[];
+  pending: BuyerReviewPendingItem[];
+  stats: {
+    submittedCount: number;
+    pendingCount: number;
+    uniqueProductsRated: number;
+  };
+}
+
+export interface BuyerReviewsResponse {
+  data: BuyerReviewsDashboardData;
+}
+
+/** One purchased line on a buyer order (titles + checkout customization snapshot). */
+export interface BuyerOrderLineItemSummary {
+  id: string;
+  productId: string;
+  quantity: number;
+  productTitle: string;
+  thumbnailUrl: string | null;
+  selections: CartItemSelection[];
+}
+
+/** Buyer order list row with first-line preview for history table. */
+export interface BuyerOrderSummaryItem {
+  id: string;
+  sellerId: string;
+  status: Order["status"];
+  paymentMethod: Order["paymentMethod"];
+  paymentStatus: Order["paymentStatus"];
+  totalAmount: number;
+  createdAt: string;
+  itemCount: number;
+  previewProductTitle: string;
+  previewThumbnailUrl: string | null;
+  lineItems: BuyerOrderLineItemSummary[];
+  estimatedDeliveryStartAt?: string;
+  estimatedDeliveryEndAt?: string;
+  estimatedDeliveryRangeDisplay?: string;
+  shippingRecipientName?: string;
+  shippingAddressLine?: string;
+  shippingCity?: string;
+  shippingPostalCode?: string;
+  shippingContactNumber?: string;
+  deliveryNotes?: string;
+  cancellationReason?: string;
+  qualityChecklist?: OrderQualityChecklist;
+  receiptStatus: Order["receiptStatus"];
+  receiptRequestNote?: string;
+}
+
+export interface BuyerOrdersSummaryResponse {
+  data: BuyerOrderSummaryItem[];
+}
+
+export interface SellerOrderSummaryItem {
+  id: string;
+  buyerId: string;
+  buyerDisplayName: string;
+  status: Order["status"];
+  paymentMethod: Order["paymentMethod"];
+  paymentStatus: Order["paymentStatus"];
+  totalAmount: number;
+  createdAt: string;
+  itemCount: number;
+  previewProductTitle: string;
+  previewThumbnailUrl: string | null;
+}
+
+export interface SellerOrdersSummaryResponse {
+  data: SellerOrderSummaryItem[];
 }
 
 export interface ProductsResponse {

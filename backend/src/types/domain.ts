@@ -9,6 +9,13 @@ export interface AuthUser {
     fullName?: string;
     /** Avatar / portrait URL (auth user_metadata in Supabase). */
     profileImageUrl?: string;
+    /** Digits-only contact for orders and delivery (buyer user_metadata). */
+    contactNumber?: string;
+    /** Default shipping street line (buyer user_metadata). */
+    shippingAddressLine?: string;
+    shippingCity?: string;
+    /** Digits-only postal / ZIP (buyer user_metadata). */
+    shippingPostalCode?: string;
     /** Account cannot sign in or use the API (admin suspend / auth ban). */
     suspended?: boolean;
 }
@@ -90,11 +97,23 @@ export interface CartItem {
     selections: CartItemSelection[];
 }
 
+/** One row the seller defines before confirming an order. */
+export interface OrderQualityChecklistItem {
+    id: string;
+    label: string;
+    checked: boolean;
+}
+
+/** Saved when the seller confirms the order; shown to the buyer as a quality attestation. */
+export interface OrderQualityChecklist {
+    items: OrderQualityChecklistItem[];
+}
+
 export interface OrderRecord {
     id: string;
     buyerId: string;
     sellerId: string;
-    status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
+    status: "created" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
     paymentMethod: "cash" | "online";
     paymentReference?: string;
     paymentStatus: "pending" | "paid";
@@ -106,6 +125,23 @@ export interface OrderRecord {
     receiptProofUrl?: string;
     /** Seller-configured method the buyer paid with. */
     sellerPaymentMethodId?: string;
+    /** Lower bound of buyer-facing delivery estimate (ISO). */
+    estimatedDeliveryStartAt?: string;
+    /** Upper bound of buyer-facing delivery estimate (ISO). */
+    estimatedDeliveryEndAt?: string;
+    /** Preformatted range as shown at checkout (optional; can derive from start/end). */
+    estimatedDeliveryRangeDisplay?: string;
+    /** Snapshot from checkout — recipient and shipping for this order. */
+    shippingRecipientName?: string;
+    shippingAddressLine?: string;
+    shippingCity?: string;
+    shippingPostalCode?: string;
+    shippingContactNumber?: string;
+    deliveryNotes?: string;
+    /** Set when status is cancelled (seller-facing explanation for the buyer). */
+    cancellationReason?: string;
+    /** Populated when the seller confirms (POST status → confirmed with checklist). */
+    qualityChecklist?: OrderQualityChecklist;
 }
 
 /** Snapshot of cart rows at checkout; used for eligibility (e.g. product reviews). */
@@ -155,6 +191,8 @@ export interface ConversationMessageRecord {
 export interface CartItemSelection {
     optionId: string;
     value: string;
+    /** Option name captured at checkout; kept on order lines if the listing changes later. */
+    optionLabel?: string;
 }
 
 export interface ProductMedia {

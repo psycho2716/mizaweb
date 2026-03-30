@@ -1,8 +1,20 @@
+/** One row the seller defines (defaults + any custom lines) before confirming. */
+export interface OrderQualityChecklistItem {
+  id: string;
+  label: string;
+  checked: boolean;
+}
+
+/** Saved when the seller confirms; buyer sees this attestation on the order. */
+export interface OrderQualityChecklist {
+  items: OrderQualityChecklistItem[];
+}
+
 export interface Order {
   id: string;
   buyerId: string;
   sellerId: string;
-  status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
+  status: "created" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
   paymentMethod: "cash" | "online";
   paymentReference?: string;
   paymentStatus: "pending" | "paid";
@@ -12,6 +24,17 @@ export interface Order {
   createdAt: string;
   receiptProofUrl?: string;
   sellerPaymentMethodId?: string;
+  estimatedDeliveryStartAt?: string;
+  estimatedDeliveryEndAt?: string;
+  estimatedDeliveryRangeDisplay?: string;
+  shippingRecipientName?: string;
+  shippingAddressLine?: string;
+  shippingCity?: string;
+  shippingPostalCode?: string;
+  shippingContactNumber?: string;
+  deliveryNotes?: string;
+  cancellationReason?: string;
+  qualityChecklist?: OrderQualityChecklist;
 }
 
 /** One row in POST /checkout when paying online (one per seller in the cart). */
@@ -25,6 +48,8 @@ export interface CheckoutOnlinePaymentLine {
 export interface CartItemSelection {
   optionId: string;
   value: string;
+  /** Snapshot of option name at purchase; present on order lines from checkout onward. */
+  optionLabel?: string;
 }
 
 /** One row in an order; product details loaded separately for display. */
@@ -49,6 +74,8 @@ export interface OrderMessage {
 export interface CheckoutSuccessDisplayMeta {
   fullName: string;
   email: string;
+  /** Digits-only mobile or landline for delivery contact. Omitted in older session entries. */
+  contactNumber?: string;
   addressLine: string;
   city: string;
   postalCode: string;

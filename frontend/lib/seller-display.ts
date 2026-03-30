@@ -6,7 +6,8 @@ export const SELLER_ORDER_STATUS_LABEL: Record<Order["status"], string> = {
     confirmed: "Confirmed",
     processing: "Being prepared",
     shipped: "Shipped",
-    delivered: "Delivered"
+    delivered: "Delivered",
+    cancelled: "Cancelled"
 };
 
 const ENUM_FRIENDLY: Record<string, string> = {

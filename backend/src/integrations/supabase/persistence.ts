@@ -9,6 +9,8 @@ import type {
     CustomizationOption,
     CustomizationRule,
     OrderLineItemRecord,
+    OrderQualityChecklist,
+    OrderQualityChecklistItem,
     OrderRecord,
     OrderMessage,
     ProductMedia,
@@ -23,6 +25,74 @@ import type {
 } from "../../types/domain";
 import { createSupabaseAdminClient, isSupabaseConfigured } from "./client";
 
+const LEGACY_QC_DEFAULTS: { id: string; label: string; legacyKey: string }[] = [
+    {
+        id: "miza-qc-default-listing",
+        label: "Item matches listing photos and description",
+        legacyKey: "itemMatchesListing"
+    },
+    {
+        id: "miza-qc-default-packing",
+        label: "Packing protects edges and corners",
+        legacyKey: "packingProtectsEdges"
+    },
+    {
+        id: "miza-qc-default-order-id",
+        label: "Label or note includes order ID",
+        legacyKey: "labelIncludesOrderId"
+    }
+];
+
+function parseStoredQualityChecklist(raw: unknown): OrderQualityChecklist | undefined {
+    if (!raw || typeof raw !== "object") {
+        return undefined;
+    }
+    const r = raw as Record<string, unknown>;
+
+    if (Array.isArray(r.items)) {
+        const items: OrderQualityChecklistItem[] = [];
+        for (const x of r.items) {
+            if (!x || typeof x !== "object") {
+                continue;
+            }
+            const o = x as Record<string, unknown>;
+            if (
+                typeof o.id !== "string" ||
+                typeof o.label !== "string" ||
+                typeof o.checked !== "boolean"
+            ) {
+                continue;
+            }
+            const id = o.id.trim();
+            const label = o.label.trim();
+            if (!id || id.length > 120 || !label || label.length > 500) {
+                continue;
+            }
+            items.push({ id, label, checked: o.checked });
+        }
+        if (items.length === 0) {
+            return undefined;
+        }
+        return { items };
+    }
+
+    if (
+        typeof r.itemMatchesListing === "boolean" &&
+        typeof r.packingProtectsEdges === "boolean" &&
+        typeof r.labelIncludesOrderId === "boolean"
+    ) {
+        return {
+            items: LEGACY_QC_DEFAULTS.map((d) => ({
+                id: d.id,
+                label: d.label,
+                checked: Boolean(r[d.legacyKey])
+            }))
+        };
+    }
+
+    return undefined;
+}
+
 function parseStoredSelections(raw: unknown): CartItemSelection[] {
     if (!Array.isArray(raw)) {
         return [];
@@ -32,9 +102,13 @@ function parseStoredSelections(raw: unknown): CartItemSelection[] {
         if (!x || typeof x !== "object") {
             continue;
         }
-        const r = x as { optionId?: unknown; value?: unknown };
+        const r = x as { optionId?: unknown; value?: unknown; optionLabel?: unknown };
         if (typeof r.optionId === "string" && typeof r.value === "string") {
-            out.push({ optionId: r.optionId, value: r.value });
+            const row: CartItemSelection = { optionId: r.optionId, value: r.value };
+            if (typeof r.optionLabel === "string" && r.optionLabel.trim()) {
+                row.optionLabel = r.optionLabel.trim();
+            }
+            out.push(row);
         }
     }
     return out;
@@ -57,6 +131,10 @@ function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
     const suspended =
         isAuthUserBanned(u) || u.user_metadata?.suspended === true || u.user_metadata?.suspended === "true";
     const metaPic = u.user_metadata?.profile_image_url ?? u.user_metadata?.avatar_url;
+    const cn = u.user_metadata?.contact_number;
+    const addr = u.user_metadata?.shipping_address_line;
+    const city = u.user_metadata?.shipping_city;
+    const zip = u.user_metadata?.shipping_postal_code;
     return {
         id: u.id,
         email: u.email ?? "",
@@ -65,6 +143,18 @@ function mapSupabaseAuthRecordToAuthUser(u: SupabaseAuthUser): AuthUser | null {
             ? { fullName: String(u.user_metadata.full_name) }
             : {}),
         ...(metaPic ? { profileImageUrl: String(metaPic) } : {}),
+        ...(cn != null && String(cn).trim() !== ""
+            ? { contactNumber: String(cn).replace(/\D/g, "") }
+            : {}),
+        ...(addr != null && String(addr).trim() !== ""
+            ? { shippingAddressLine: String(addr).trim() }
+            : {}),
+        ...(city != null && String(city).trim() !== ""
+            ? { shippingCity: String(city).trim() }
+            : {}),
+        ...(zip != null && String(zip).trim() !== ""
+            ? { shippingPostalCode: String(zip).replace(/\D/g, "") }
+            : {}),
         ...(suspended ? { suspended: true } : {})
     };
 }
@@ -80,28 +170,41 @@ export function applyAuthUserToRuntime(u: SupabaseAuthUser): void {
 async function loadAuthUsersIntoRuntime(
     supabase: NonNullable<ReturnType<typeof createSupabaseAdminClient>>
 ): Promise<void> {
-    db.users.clear();
+    const merged = new Map<string, AuthUser>();
     let page = 1;
     const perPage = 1000;
-    for (;;) {
-        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
-        if (error) {
-            console.error("[loadAuthUsersIntoRuntime]", error.message);
-            return;
-        }
-        if (!data?.users?.length) {
-            break;
-        }
-        for (const u of data.users) {
-            const mapped = mapSupabaseAuthRecordToAuthUser(u);
-            if (mapped) {
-                db.users.set(mapped.id, mapped);
+    try {
+        for (;;) {
+            const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+            if (error) {
+                console.error("[loadAuthUsersIntoRuntime]", error.message);
+                return;
             }
+            if (!data?.users?.length) {
+                break;
+            }
+            for (const u of data.users) {
+                const mapped = mapSupabaseAuthRecordToAuthUser(u);
+                if (mapped) {
+                    merged.set(mapped.id, mapped);
+                }
+            }
+            if (data.users.length < perPage) {
+                break;
+            }
+            page += 1;
         }
-        if (data.users.length < perPage) {
-            break;
+        db.users.clear();
+        for (const [, user] of merged) {
+            db.users.set(user.id, user);
         }
-        page += 1;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+            "[loadAuthUsersIntoRuntime]",
+            message,
+            "(is local Supabase running? Try: npm run supabase:start from repo root)"
+        );
     }
 }
 
@@ -201,7 +304,7 @@ interface OrderRow {
     id: string;
     buyer_id: string;
     seller_id: string;
-    status: "created" | "confirmed" | "processing" | "shipped" | "delivered";
+    status: "created" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
     payment_method: "cash" | "online";
     payment_reference: string | null;
     payment_status: "pending" | "paid";
@@ -211,6 +314,17 @@ interface OrderRow {
     created_at: string;
     receipt_proof_url?: string | null;
     seller_payment_method_id?: string | null;
+    estimated_delivery_start_at?: string | null;
+    estimated_delivery_end_at?: string | null;
+    estimated_delivery_range_display?: string | null;
+    shipping_recipient_name?: string | null;
+    shipping_address_line?: string | null;
+    shipping_city?: string | null;
+    shipping_postal_code?: string | null;
+    shipping_contact_number?: string | null;
+    delivery_notes?: string | null;
+    cancellation_reason?: string | null;
+    quality_checklist?: unknown | null;
 }
 
 interface OrderMessageRow {
@@ -268,6 +382,7 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         return;
     }
 
+    try {
     const [
         statusRes,
         verificationRes,
@@ -303,8 +418,6 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         supabase.from("app_conversation_messages").select("*"),
         supabase.from("app_seller_location_requests").select("*")
     ]);
-
-    await loadAuthUsersIntoRuntime(supabase);
 
     if (statusRes.data) {
         db.sellerStatus.clear();
@@ -454,6 +567,7 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
     if (orderRes.data) {
         db.orders.clear();
         for (const row of orderRes.data as OrderRow[]) {
+            const qualityChecklist = parseStoredQualityChecklist(row.quality_checklist);
             db.orders.set(row.id, {
                 id: row.id,
                 buyerId: row.buyer_id,
@@ -471,7 +585,34 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
                 ...(row.receipt_proof_url ? { receiptProofUrl: row.receipt_proof_url } : {}),
                 ...(row.seller_payment_method_id
                     ? { sellerPaymentMethodId: row.seller_payment_method_id }
-                    : {})
+                    : {}),
+                ...(row.estimated_delivery_start_at
+                    ? { estimatedDeliveryStartAt: row.estimated_delivery_start_at }
+                    : {}),
+                ...(row.estimated_delivery_end_at
+                    ? { estimatedDeliveryEndAt: row.estimated_delivery_end_at }
+                    : {}),
+                ...(row.estimated_delivery_range_display
+                    ? { estimatedDeliveryRangeDisplay: row.estimated_delivery_range_display }
+                    : {}),
+                ...(row.shipping_recipient_name
+                    ? { shippingRecipientName: row.shipping_recipient_name }
+                    : {}),
+                ...(row.shipping_address_line
+                    ? { shippingAddressLine: row.shipping_address_line }
+                    : {}),
+                ...(row.shipping_city ? { shippingCity: row.shipping_city } : {}),
+                ...(row.shipping_postal_code
+                    ? { shippingPostalCode: row.shipping_postal_code }
+                    : {}),
+                ...(row.shipping_contact_number
+                    ? { shippingContactNumber: row.shipping_contact_number }
+                    : {}),
+                ...(row.delivery_notes ? { deliveryNotes: row.delivery_notes } : {}),
+                ...(row.cancellation_reason
+                    ? { cancellationReason: row.cancellation_reason }
+                    : {}),
+                ...(qualityChecklist ? { qualityChecklist } : {})
             });
         }
     }
@@ -491,6 +632,9 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         }
     }
 
+    if (messageRes.error) {
+        console.error("[refreshRuntimeStateFromSupabase] app_order_messages", messageRes.error.message);
+    }
     if (messageRes.data) {
         db.orderMessages.clear();
         for (const row of messageRes.data as OrderMessageRow[]) {
@@ -548,7 +692,17 @@ async function refreshRuntimeStateFromSupabase(): Promise<void> {
         }
     }
 
+    await loadAuthUsersIntoRuntime(supabase);
+
     lastSyncAt = Date.now();
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+            "[refreshRuntimeStateFromSupabase]",
+            message,
+            "(check SUPABASE_URL and Docker; run `npm run supabase:status` from repo root)"
+        );
+    }
 }
 
 export async function syncFromSupabaseIfStale(): Promise<void> {
@@ -912,10 +1066,16 @@ export async function deleteCartItem(cartItemId: string): Promise<void> {
     }
 }
 
-export function persistOrder(row: OrderRecord): void {
+/**
+ * Persists order to Supabase before returning API success. Required so the global
+ * `syncFromSupabaseIfStale` middleware does not reload from DB and drop in-memory-only orders.
+ */
+export async function persistOrder(row: OrderRecord): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_orders").upsert(
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_orders").upsert(
         {
             id: row.id,
             buyer_id: row.buyerId,
@@ -929,26 +1089,53 @@ export function persistOrder(row: OrderRecord): void {
             total_amount: row.totalAmount,
             created_at: row.createdAt,
             receipt_proof_url: row.receiptProofUrl ?? null,
-            seller_payment_method_id: row.sellerPaymentMethodId ?? null
+            seller_payment_method_id: row.sellerPaymentMethodId ?? null,
+            estimated_delivery_start_at: row.estimatedDeliveryStartAt ?? null,
+            estimated_delivery_end_at: row.estimatedDeliveryEndAt ?? null,
+            estimated_delivery_range_display: row.estimatedDeliveryRangeDisplay ?? null,
+            shipping_recipient_name: row.shippingRecipientName ?? null,
+            shipping_address_line: row.shippingAddressLine ?? null,
+            shipping_city: row.shippingCity ?? null,
+            shipping_postal_code: row.shippingPostalCode ?? null,
+            shipping_contact_number: row.shippingContactNumber ?? null,
+            delivery_notes: row.deliveryNotes ?? null,
+            cancellation_reason: row.cancellationReason ?? null,
+            quality_checklist: row.qualityChecklist ?? null
         },
         { onConflict: "id" }
     );
+    if (error) {
+        console.error("[persistOrder]", error.message);
+        throw new Error(`Failed to persist order: ${error.message}`);
+    }
 }
 
-export function persistOrderLineItem(row: OrderLineItemRecord): void {
+export async function persistOrderLineItem(row: OrderLineItemRecord): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_order_line_items").upsert(
-        {
-            id: row.id,
-            order_id: row.orderId,
-            product_id: row.productId,
-            quantity: row.quantity,
-            created_at: row.createdAt,
-            selections: row.selections
-        },
-        { onConflict: "id" }
-    );
+    if (!supabase) {
+        return;
+    }
+    const selections = Array.isArray(row.selections) ? row.selections : [];
+    const basePayload = {
+        id: row.id,
+        order_id: row.orderId,
+        product_id: row.productId,
+        quantity: row.quantity,
+        created_at: row.createdAt
+    };
+    let { error } = await supabase
+        .from("app_order_line_items")
+        .upsert({ ...basePayload, selections }, { onConflict: "id" });
+    if (error && isMissingCartSelectionsColumnError(error)) {
+        console.warn(
+            "[persistOrderLineItem] Retrying without selections (apply migration 0031_cart_and_line_item_selections.sql)"
+        );
+        ({ error } = await supabase.from("app_order_line_items").upsert(basePayload, { onConflict: "id" }));
+    }
+    if (error) {
+        console.error("[persistOrderLineItem]", error.message);
+        throw new Error(`Failed to persist order line item: ${error.message}`);
+    }
 }
 
 export function deleteOrderLineItem(lineItemId: string): void {
@@ -957,10 +1144,20 @@ export function deleteOrderLineItem(lineItemId: string): void {
     void supabase.from("app_order_line_items").delete().eq("id", lineItemId);
 }
 
-export function persistOrderMessage(row: OrderMessage): void {
+/**
+ * Persists a single order thread message. When Supabase is configured, failures throw
+ * (callers should roll back in-memory state for user-sent messages). Without Supabase,
+ * messages exist only in memory until the API process restarts.
+ */
+export async function persistOrderMessage(row: OrderMessage): Promise<void> {
     const supabase = createSupabaseAdminClient();
-    if (!supabase) return;
-    void supabase.from("app_order_messages").upsert(
+    if (!supabase) {
+        console.warn(
+            "[persistOrderMessage] Supabase not configured; order messages are not written to the database."
+        );
+        return;
+    }
+    const { error } = await supabase.from("app_order_messages").upsert(
         {
             id: row.id,
             order_id: row.orderId,
@@ -970,6 +1167,10 @@ export function persistOrderMessage(row: OrderMessage): void {
         },
         { onConflict: "id" }
     );
+    if (error) {
+        console.error("[persistOrderMessage]", error.message, error);
+        throw new Error(`Failed to persist order message: ${error.message}`);
+    }
 }
 
 export async function persistProductReview(row: ProductReviewRecord): Promise<void> {
@@ -992,6 +1193,18 @@ export async function persistProductReview(row: ProductReviewRecord): Promise<vo
     if (error) {
         console.error("[persistProductReview]", error.message);
         throw new Error(`Failed to persist product review: ${error.message}`);
+    }
+}
+
+export async function deleteProductReviewById(reviewId: string): Promise<void> {
+    const supabase = createSupabaseAdminClient();
+    if (!supabase) {
+        return;
+    }
+    const { error } = await supabase.from("app_product_reviews").delete().eq("id", reviewId);
+    if (error) {
+        console.error("[deleteProductReviewById]", error.message);
+        throw new Error(`Failed to delete product review: ${error.message}`);
     }
 }
 

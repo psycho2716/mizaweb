@@ -10,7 +10,10 @@
     "doc": "docs"
   },
   "scripts": {
-    "dev": "concurrently --raw \"npm -s run dev --prefix backend\" \"npm -s run dev --prefix frontend\""
+    "dev": "concurrently --raw \"npm -s run dev --prefix backend\" \"npm -s run dev --prefix frontend\"",
+    "supabase:start": "npx supabase start",
+    "supabase:stop": "npx supabase stop",
+    "supabase:status": "npx supabase status"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

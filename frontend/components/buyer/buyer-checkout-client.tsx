@@ -21,10 +21,29 @@ import {
 } from "@/lib/api/endpoints";
 import { readMizaStoredUser } from "@/hooks/use-miza-stored-user";
 import { writeCheckoutSuccessMeta } from "@/lib/checkout-success-storage";
+import { canonicalPaymentReceiptUrlFromUploadTarget } from "@/lib/canonical-payment-receipt";
 import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
 import { formatCartSelectionsLine } from "@/lib/format-cart-selections";
 import { cn, formatPeso, getAppName } from "@/lib/utils";
 import type { CartItemResponse, CartItemSelection, ProductDetail, SellerPublicProfile } from "@/types";
+
+type OnlineSellerPayState = {
+    methodId: string;
+    /** Canonical URL sent with checkout (public-path shape; server resolves reads with signed URLs). */
+    receiptUrl: string;
+    /** In-memory preview only; revoked when removed or unmounted. */
+    receiptPreviewObjectUrl: string | null;
+    receiptUploading: boolean;
+};
+
+function emptyOnlineSellerPayState(): OnlineSellerPayState {
+    return {
+        methodId: "",
+        receiptUrl: "",
+        receiptPreviewObjectUrl: null,
+        receiptUploading: false
+    };
+}
 
 type Step = 1 | 2 | 3;
 
@@ -34,13 +53,24 @@ const fieldClass =
 const notesClass =
     "min-h-[100px] w-full resize-y border-x-0 border-t-0 border-b border-white/15 rounded-none bg-transparent px-0 py-2 text-sm text-foreground placeholder:text-(--muted) focus-visible:border-(--accent)/60 focus-visible:ring-0 focus-visible:outline-none";
 
-function formatEstimatedDeliveryRange(): string {
+/** Matches checkout UI: +7 / +14 local calendar days, persisted on the order. */
+function computeEstimatedDeliveryForCheckout(): {
+    estimatedDeliveryStartAt: string;
+    estimatedDeliveryEndAt: string;
+    estimatedDeliveryRangeDisplay: string;
+} {
     const start = new Date();
     start.setDate(start.getDate() + 7);
+    start.setHours(12, 0, 0, 0);
     const end = new Date();
     end.setDate(end.getDate() + 14);
+    end.setHours(12, 0, 0, 0);
     const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
-    return `${start.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`;
+    return {
+        estimatedDeliveryStartAt: start.toISOString(),
+        estimatedDeliveryEndAt: end.toISOString(),
+        estimatedDeliveryRangeDisplay: `${start.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`
+    };
 }
 
 function parsePrepareSpecs(raw: string | null): CartItemSelection[] {
@@ -105,12 +135,6 @@ function StepChip({
     );
 }
 
-type OnlineSellerPayState = {
-    methodId: string;
-    receiptUrl: string;
-    receiptUploading: boolean;
-};
-
 export function BuyerCheckoutClient() {
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -125,6 +149,7 @@ export function BuyerCheckoutClient() {
 
     const [fullName, setFullName] = useState("");
     const [email, setEmail] = useState("");
+    const [contactNumber, setContactNumber] = useState("");
     const [addressLine, setAddressLine] = useState("");
     const [city, setCity] = useState("");
     const [postalCode, setPostalCode] = useState("");
@@ -133,6 +158,18 @@ export function BuyerCheckoutClient() {
     const [paymentMethod, setPaymentMethod] = useState<"cash" | "online">("cash");
     const [sellerProfiles, setSellerProfiles] = useState<Record<string, SellerPublicProfile>>({});
     const [onlineBySeller, setOnlineBySeller] = useState<Record<string, OnlineSellerPayState>>({});
+    const onlineBySellerRef = useRef(onlineBySeller);
+    onlineBySellerRef.current = onlineBySeller;
+
+    useEffect(() => {
+        return () => {
+            for (const row of Object.values(onlineBySellerRef.current)) {
+                if (row.receiptPreviewObjectUrl) {
+                    URL.revokeObjectURL(row.receiptPreviewObjectUrl);
+                }
+            }
+        };
+    }, []);
 
     const loadCartAndProducts = useCallback(async () => {
         setLoadingCart(true);
@@ -215,6 +252,18 @@ export function BuyerCheckoutClient() {
         if (local?.fullName?.trim()) {
             setFullName((prev) => (prev.trim() ? prev : local.fullName!.trim()));
         }
+        if (local?.contactNumber) {
+            setContactNumber((prev) => (prev.trim() ? prev : local.contactNumber!));
+        }
+        if (local?.shippingAddressLine?.trim()) {
+            setAddressLine((prev) => (prev.trim() ? prev : local.shippingAddressLine!.trim()));
+        }
+        if (local?.shippingCity?.trim()) {
+            setCity((prev) => (prev.trim() ? prev : local.shippingCity!.trim()));
+        }
+        if (local?.shippingPostalCode) {
+            setPostalCode((prev) => (prev.trim() ? prev : local.shippingPostalCode!));
+        }
         void getAuthMe()
             .then((res) => {
                 if (cancelled || !res.user) {
@@ -226,6 +275,18 @@ export function BuyerCheckoutClient() {
                 }
                 if (u.fullName?.trim()) {
                     setFullName(u.fullName.trim());
+                }
+                if (u.contactNumber) {
+                    setContactNumber(u.contactNumber);
+                }
+                if (u.shippingAddressLine?.trim()) {
+                    setAddressLine(u.shippingAddressLine.trim());
+                }
+                if (u.shippingCity?.trim()) {
+                    setCity(u.shippingCity.trim());
+                }
+                if (u.shippingPostalCode) {
+                    setPostalCode(u.shippingPostalCode);
                 }
             })
             .catch(() => {
@@ -273,11 +334,15 @@ export function BuyerCheckoutClient() {
             const ids = new Set(sellerCheckoutGroups.map((g) => g.sellerId));
             for (const id of ids) {
                 if (!next[id]) {
-                    next[id] = { methodId: "", receiptUrl: "", receiptUploading: false };
+                    next[id] = emptyOnlineSellerPayState();
                 }
             }
             for (const k of Object.keys(next)) {
                 if (!ids.has(k)) {
+                    const row = next[k];
+                    if (row?.receiptPreviewObjectUrl) {
+                        URL.revokeObjectURL(row.receiptPreviewObjectUrl);
+                    }
                     delete next[k];
                 }
             }
@@ -315,25 +380,33 @@ export function BuyerCheckoutClient() {
     }, [cartItems, productMap]);
 
     const uploadReceiptProof = useCallback(async (sellerId: string, file: File) => {
-        setOnlineBySeller((p) => ({
-            ...p,
-            [sellerId]: {
-                ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
-                receiptUploading: true
+        setOnlineBySeller((p) => {
+            const prev = p[sellerId] ?? emptyOnlineSellerPayState();
+            if (prev.receiptPreviewObjectUrl) {
+                URL.revokeObjectURL(prev.receiptPreviewObjectUrl);
             }
-        }));
+            return {
+                ...p,
+                [sellerId]: {
+                    ...prev,
+                    receiptUploading: true
+                }
+            };
+        });
         try {
             const target = await createBuyerAssetUploadUrl(file.name, "payment-receipt");
             const put = await putToSignedUploadUrl(target.uploadUrl, file);
             if (!put.ok) {
                 throw new Error("Upload failed");
             }
-            const url = target.publicUrl ?? target.uploadUrl;
+            const url = canonicalPaymentReceiptUrlFromUploadTarget(target);
+            const preview = URL.createObjectURL(file);
             setOnlineBySeller((p) => ({
                 ...p,
                 [sellerId]: {
-                    ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
+                    ...(p[sellerId] ?? emptyOnlineSellerPayState()),
                     receiptUrl: url,
+                    receiptPreviewObjectUrl: preview,
                     receiptUploading: false
                 }
             }));
@@ -343,19 +416,23 @@ export function BuyerCheckoutClient() {
             setOnlineBySeller((p) => ({
                 ...p,
                 [sellerId]: {
-                    ...(p[sellerId] ?? { methodId: "", receiptUrl: "", receiptUploading: false }),
+                    ...(p[sellerId] ?? emptyOnlineSellerPayState()),
                     receiptUploading: false
                 }
             }));
         }
     }, []);
 
+    const contactDigits = contactNumber.replace(/\D/g, "");
+    const postalDigits = postalCode.replace(/\D/g, "");
+
     const canContinueStep1 =
         fullName.trim().length > 1 &&
         email.includes("@") &&
+        contactDigits.length >= 10 &&
         addressLine.trim().length > 3 &&
         city.trim().length > 0 &&
-        postalCode.trim().length > 0;
+        postalDigits.length > 0;
 
     const canProceedPaymentStep = useMemo(() => {
         if (paymentMethod === "cash") {
@@ -388,8 +465,18 @@ export function BuyerCheckoutClient() {
         }
         setSubmitting(true);
         try {
+            const deliveryEst = computeEstimatedDeliveryForCheckout();
             const result = await checkoutCart({
                 paymentMethod,
+                estimatedDeliveryStartAt: deliveryEst.estimatedDeliveryStartAt,
+                estimatedDeliveryEndAt: deliveryEst.estimatedDeliveryEndAt,
+                estimatedDeliveryRangeDisplay: deliveryEst.estimatedDeliveryRangeDisplay,
+                shippingRecipientName: fullName.trim(),
+                shippingContactNumber: contactDigits,
+                shippingAddressLine: addressLine.trim(),
+                shippingCity: city.trim(),
+                shippingPostalCode: postalDigits,
+                ...(deliveryNotes.trim() ? { deliveryNotes: deliveryNotes.trim() } : {}),
                 ...(paymentMethod === "online"
                     ? {
                           onlinePayments: sellerCheckoutGroups.map((g) => ({
@@ -400,18 +487,21 @@ export function BuyerCheckoutClient() {
                       }
                     : {})
             });
-            const estimatedDeliveryRange = formatEstimatedDeliveryRange();
-            const notes = deliveryNotes.trim();
             const orders = result.orders;
+            if (!Array.isArray(orders) || orders.length === 0) {
+                throw new Error("Checkout did not return any orders. Please try again.");
+            }
+            const notes = deliveryNotes.trim();
             if (orders.length === 1) {
                 writeCheckoutSuccessMeta(orders[0].id, {
                     fullName: fullName.trim(),
                     email: email.trim(),
+                    contactNumber: contactDigits,
                     addressLine: addressLine.trim(),
                     city: city.trim(),
-                    postalCode: postalCode.trim(),
+                    postalCode: postalDigits,
                     ...(notes ? { deliveryNotes: notes } : {}),
-                    estimatedDeliveryRange
+                    estimatedDeliveryRange: deliveryEst.estimatedDeliveryRangeDisplay
                 });
                 toast.success("Order placed");
                 router.push(`/buyer/orders/success?orderId=${encodeURIComponent(orders[0].id)}`);
@@ -493,10 +583,6 @@ export function BuyerCheckoutClient() {
                         <span className="max-w-[55%] text-right text-xs leading-snug text-foreground">
                             Arranged with seller
                         </span>
-                    </div>
-                    <div className="flex justify-between gap-4 text-(--muted)">
-                        <span>Taxes</span>
-                        <span className="text-right text-xs text-foreground">As applicable</span>
                     </div>
                     <div className="flex justify-between border-t border-white/10 pt-3 text-base font-bold">
                         <span>Total</span>
@@ -617,6 +703,29 @@ export function BuyerCheckoutClient() {
                                         </div>
                                         <div className="sm:col-span-2">
                                             <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
+                                                Contact number
+                                            </Label>
+                                            <Input
+                                                className={cn(fieldClass, "mt-2")}
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={contactNumber}
+                                                onChange={(e) =>
+                                                    setContactNumber(e.target.value.replace(/\D/g, ""))
+                                                }
+                                                placeholder="09XXXXXXXXX"
+                                                autoComplete="tel"
+                                                aria-describedby="checkout-contact-hint"
+                                            />
+                                            <p
+                                                id="checkout-contact-hint"
+                                                className="mt-1.5 text-[11px] text-(--muted)"
+                                            >
+                                                Digits only — for delivery updates and seller contact.
+                                            </p>
+                                        </div>
+                                        <div className="sm:col-span-2">
+                                            <Label className="text-[10px] font-semibold uppercase tracking-[0.2em] text-(--muted)">
                                                 Street address
                                             </Label>
                                             <Input
@@ -644,10 +753,22 @@ export function BuyerCheckoutClient() {
                                             </Label>
                                             <Input
                                                 className={cn(fieldClass, "mt-2")}
+                                                type="text"
+                                                inputMode="numeric"
                                                 value={postalCode}
-                                                onChange={(e) => setPostalCode(e.target.value)}
+                                                onChange={(e) =>
+                                                    setPostalCode(e.target.value.replace(/\D/g, ""))
+                                                }
                                                 autoComplete="postal-code"
+                                                placeholder="Digits only"
+                                                aria-describedby="checkout-postal-hint"
                                             />
+                                            <p
+                                                id="checkout-postal-hint"
+                                                className="mt-1.5 text-[11px] text-(--muted)"
+                                            >
+                                                Numbers only.
+                                            </p>
                                         </div>
                                     </div>
 
@@ -795,14 +916,8 @@ export function BuyerCheckoutClient() {
                                                                                                         ...(p[
                                                                                                             group
                                                                                                                 .sellerId
-                                                                                                        ] ?? {
-                                                                                                            methodId:
-                                                                                                                "",
-                                                                                                            receiptUrl:
-                                                                                                                "",
-                                                                                                            receiptUploading:
-                                                                                                                false
-                                                                                                        }),
+                                                                                                        ] ??
+                                                                                                            emptyOnlineSellerPayState()),
                                                                                                         methodId: m.id
                                                                                                     }
                                                                                             })
@@ -870,7 +985,10 @@ export function BuyerCheckoutClient() {
                                                                             <div className="mt-3 flex items-start gap-3">
                                                                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                                                                 <img
-                                                                                    src={row.receiptUrl}
+                                                                                    src={
+                                                                                        row.receiptPreviewObjectUrl ??
+                                                                                        row.receiptUrl
+                                                                                    }
                                                                                     alt="Receipt preview"
                                                                                     className="h-24 w-auto max-w-full rounded border border-white/10 object-contain"
                                                                                 />
@@ -879,24 +997,32 @@ export function BuyerCheckoutClient() {
                                                                                     className="text-[10px] font-semibold uppercase tracking-wide text-(--accent)"
                                                                                     onClick={() =>
                                                                                         setOnlineBySeller(
-                                                                                            (p) => ({
-                                                                                                ...p,
-                                                                                                [group.sellerId]:
-                                                                                                    {
-                                                                                                        ...(p[
-                                                                                                            group
-                                                                                                                .sellerId
-                                                                                                        ] ?? {
-                                                                                                            methodId:
-                                                                                                                "",
+                                                                                            (p) => {
+                                                                                                const cur =
+                                                                                                    p[
+                                                                                                        group
+                                                                                                            .sellerId
+                                                                                                    ] ??
+                                                                                                    emptyOnlineSellerPayState();
+                                                                                                if (
+                                                                                                    cur.receiptPreviewObjectUrl
+                                                                                                ) {
+                                                                                                    URL.revokeObjectURL(
+                                                                                                        cur.receiptPreviewObjectUrl
+                                                                                                    );
+                                                                                                }
+                                                                                                return {
+                                                                                                    ...p,
+                                                                                                    [group.sellerId]:
+                                                                                                        {
+                                                                                                            ...cur,
                                                                                                             receiptUrl:
                                                                                                                 "",
-                                                                                                            receiptUploading:
-                                                                                                                false
-                                                                                                        }),
-                                                                                                        receiptUrl: ""
-                                                                                                    }
-                                                                                            })
+                                                                                                            receiptPreviewObjectUrl:
+                                                                                                                null
+                                                                                                        }
+                                                                                                };
+                                                                                            }
                                                                                         )
                                                                                     }
                                                                                 >
@@ -947,8 +1073,9 @@ export function BuyerCheckoutClient() {
                                             </p>
                                             <p className="mt-2 font-medium text-foreground">{fullName}</p>
                                             <p className="text-(--muted)">{email}</p>
+                                            <p className="mt-1 text-(--muted)">{contactDigits}</p>
                                             <p className="mt-2 text-(--muted)">
-                                                {addressLine}, {city} {postalCode}
+                                                {addressLine}, {city} {postalDigits}
                                             </p>
                                         </div>
                                         {deliveryNotes.trim() ? (
