@@ -121,6 +121,8 @@ export interface OrderReceiptShipTo {
 /** Data passed to `openOrderReceiptPrintWindow` (Mizaweb-styled document). */
 export interface OrderReceiptPrintPayload {
   appName: string;
+  /** Absolute URL to the logo for print HTML (e.g. `origin + /images/logo.png`). */
+  appLogoAbsoluteUrl?: string;
   orderId: string;
   /** ISO timestamp from the order. */
   orderPlacedAtIso: string;

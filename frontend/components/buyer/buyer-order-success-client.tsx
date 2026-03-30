@@ -16,7 +16,7 @@ import { getOrderById, getProductDetail } from "@/lib/api/endpoints";
 import { readCheckoutSuccessMeta } from "@/lib/checkout-success-storage";
 import { openOrderReceiptPrintWindow } from "@/lib/order-receipt-print";
 import { normalizeCartItemSelections } from "@/lib/normalize-cart-item-selections";
-import { formatPeso, getAppName } from "@/lib/utils";
+import { formatPeso, getAppLogoSrc, getAppName } from "@/lib/utils";
 import type {
     CartItemSelection,
     CheckoutSuccessDisplayMeta,
@@ -270,6 +270,7 @@ export function BuyerOrderSuccessClient() {
         });
         const payload: OrderReceiptPrintPayload = {
             appName,
+            appLogoAbsoluteUrl: `${window.location.origin}${getAppLogoSrc()}`,
             orderId,
             orderPlacedAtIso: order.createdAt,
             paymentMethodLabel: paymentMethodLabelForReceipt(order),

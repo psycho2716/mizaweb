@@ -122,6 +122,7 @@ export function buildOrderReceiptHtml(p: OrderReceiptPrintPayload): string {
       margin-bottom: 20px;
     }
     .brand { margin: 0; font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; color: ${ink}; }
+    .brand-logo { display: block; height: 48px; width: auto; max-width: 180px; object-fit: contain; }
     .tag { margin: 6px 0 0; font-size: 11px; color: ${muted}; max-width: 260px; }
     .badge {
       text-align: right;
@@ -201,7 +202,11 @@ export function buildOrderReceiptHtml(p: OrderReceiptPrintPayload): string {
   <div class="wrap">
     <header class="mast">
       <div>
-        <h1 class="brand">${escapeHtml(p.appName)}</h1>
+        ${
+            p.appLogoAbsoluteUrl
+                ? `<img src="${escapeHtml(p.appLogoAbsoluteUrl)}" alt="${escapeHtml(p.appName)}" class="brand-logo" width="160" height="48"/>`
+                : `<h1 class="brand">${escapeHtml(p.appName)}</h1>`
+        }
         <p class="tag">Hand-finished stone from verified local sellers. This receipt is your record of purchase.</p>
       </div>
       <div class="badge">Order receipt</div>

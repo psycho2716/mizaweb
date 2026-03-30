@@ -80,7 +80,9 @@ export function AdminConsoleShell({ children, activeNav = "verifications" }: Adm
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-(--border) bg-[#080b10]/95 px-4 backdrop-blur md:px-6">
           <div className="flex min-w-0 items-center gap-2 text-sm">
-            <span className="truncate font-medium text-foreground">{appName} Admin</span>
+            <span className="truncate font-medium text-foreground">
+              {appName} Admin
+            </span>
             <span className="text-(--border)">|</span>
             <span className="truncate text-(--accent)">
               {activeNav === "users"

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowRight, MoreHorizontal, Paperclip, Search, ShoppingBag } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
-import { cn } from "@/lib/utils";
+import { cn, getAppName } from "@/lib/utils";
 import type { AuthUser, ConversationThread, DirectMessage } from "@/types";
 import {
     createConversation,
@@ -68,6 +68,7 @@ export function DirectMessagesClient({
     subheading,
     maxWidthClass = "max-w-[1600px]"
 }: DirectMessagesClientProps) {
+    const appName = getAppName();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -628,7 +629,7 @@ export function DirectMessagesClient({
             </div>
 
             <p className="mt-4 text-center text-[10px] text-(--muted)">
-                Mizaweb messages · Plain language · Encrypted in transit (HTTPS)
+                {appName} messages · Plain language · Encrypted in transit (HTTPS)
             </p>
         </main>
     );

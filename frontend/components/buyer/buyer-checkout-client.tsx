@@ -136,9 +136,9 @@ function StepChip({
 }
 
 export function BuyerCheckoutClient() {
+    const appName = getAppName();
     const router = useRouter();
     const searchParams = useSearchParams();
-    const appName = getAppName();
     const prepareHandled = useRef(false);
 
     const [step, setStep] = useState<Step>(1);

@@ -9,6 +9,11 @@ export function getAppName(): string {
     return process.env.NEXT_PUBLIC_APP_NAME ?? "Mizaweb";
 }
 
+/** Public path to the app mark (see `frontend/public/images/logo.png`). */
+export function getAppLogoSrc(): string {
+    return "/images/logo.png";
+}
+
 /** Browser key for Maps JavaScript API (Places / map embeds). */
 export function getGoogleMapsBrowserApiKey(): string {
     return process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() ?? "";

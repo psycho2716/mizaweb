@@ -424,11 +424,11 @@ export function ProductsListingClient({ initialProducts }: ProductsListingClient
         priceBounds.max
     ]);
 
-    const appName = getAppName();
-
     const sortLabel =
         CATALOG_SORT_OPTIONS.find((o) => o.value === sortBy)?.label ??
         CATALOG_SORT_OPTIONS[0].label;
+
+    const appName = getAppName();
 
     return (
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:py-12">

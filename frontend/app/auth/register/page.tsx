@@ -21,6 +21,7 @@ import {
 import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
 import { persistClientAuthSession } from "@/lib/auth/persist-client-session";
 import { putToSignedUploadUrl } from "@/lib/storage/put-signed-upload";
+import { getAppName } from "@/lib/utils";
 import { buyerRegisterSchema, sellerRegisterSchema } from "@/types";
 
 const SellerShopMapPicker = dynamic(() => import("@/components/auth/seller-shop-map-picker"), {
@@ -36,6 +37,7 @@ type BuyerRegisterFormValues = z.infer<typeof buyerRegisterSchema>;
 type SellerRegisterFormValues = z.infer<typeof sellerRegisterSchema>;
 
 function RegisterPageContent() {
+    const appName = getAppName();
     const router = useRouter();
     const searchParams = useSearchParams();
     const [permitFile, setPermitFile] = useState<File | null>(null);
@@ -174,7 +176,7 @@ function RegisterPageContent() {
                             </p>
                         </div>
                         <p className="text-xs uppercase tracking-[0.14em] text-(--muted)">
-                            Mizaweb marketplace
+                            {appName} marketplace
                         </p>
                     </div>
                 </section>
@@ -185,7 +187,7 @@ function RegisterPageContent() {
                             Create account
                         </p>
                         <h2 className="mt-3 text-4xl font-semibold tracking-tight text-foreground">
-                            Join Mizaweb
+                            Join {appName}
                         </h2>
                         <p className="mt-2 text-sm text-(--muted)">
                             Select your account type and complete your registration details.

@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useMizaStoredUser } from "@/hooks/use-miza-stored-user";
-import { getAppName } from "@/lib/utils";
 import type { AuthUser } from "@/types";
+import { getAppName } from "@/lib/utils";
 
 const footerNavigationGuest = [
     { label: "Marketplace", href: "/products" },
@@ -37,7 +37,6 @@ function footerLinksForUser(user: AuthUser): { label: string; href: string }[] {
 export function PublicFooter() {
     const appName = getAppName();
     const { user } = useMizaStoredUser();
-
     const footerNavigation = useMemo(
         () => (user ? footerLinksForUser(user) : [...footerNavigationGuest]),
         [user]
@@ -48,9 +47,7 @@ export function PublicFooter() {
             <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
                 <div className="grid gap-8 md:grid-cols-3">
                     <div className="space-y-2">
-                        <p className="text-xl font-semibold tracking-wide text-foreground">
-                            {appName}
-                        </p>
+                        <p className="text-xl font-semibold tracking-wide text-foreground">{appName}</p>
                         <p className="max-w-xs text-sm leading-relaxed text-(--muted)">
                             Hand-finished stone goods—sculptures, kitchen pieces, décor, and
                             accessories—from verified Romblomanon artisans. Shop products, message

@@ -9,8 +9,6 @@ import type { SellerStorefrontPublicViewProps } from "@/types";
 
 function verificationHeadline(status: string): string {
     switch (status) {
-        case "approved":
-            return "Verified by Mizaweb";
         case "pending":
             return "We’re still checking this shop";
         case "rejected":
@@ -191,7 +189,11 @@ export function SellerStorefrontPublicView({ profile }: SellerStorefrontPublicVi
                                 Trust
                             </p>
                             <p className="mt-1 text-sm font-semibold text-foreground">
-                                {verificationHeadline(profile.verificationStatus)}
+                                {profile.verificationStatus === "approved" ? (
+                                    <>Verified by {appName}</>
+                                ) : (
+                                    verificationHeadline(profile.verificationStatus)
+                                )}
                             </p>
                         </div>
                     </div>
@@ -321,7 +323,7 @@ export function SellerStorefrontPublicView({ profile }: SellerStorefrontPublicVi
                         <p className="mt-4 text-sm leading-relaxed text-(--muted) sm:text-base">
                             This map reflects where the seller pinned their shop—use it to orient
                             pickups, meetups, or regional context. Final delivery terms are
-                            confirmed per order in Mizaweb checkout and chat.
+                            confirmed per order in {appName} checkout and chat.
                         </p>
                     </div>
                     <div className="relative overflow-hidden border border-white/10 bg-[#080a0e] p-1 shadow-[0_0_50px_-18px_rgba(34,199,243,0.2)]">

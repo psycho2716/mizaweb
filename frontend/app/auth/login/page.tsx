@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { isCallbackAllowedForRole, parseSafeCallbackUrl } from "@/lib/auth/callback-url";
 import { loginWithEmailPassword } from "@/lib/api/endpoints";
 import { persistClientAuthSession } from "@/lib/auth/persist-client-session";
+import { getAppName } from "@/lib/utils";
 import { loginSchema } from "@/types";
 
 type LoginFormValues = z.infer<typeof loginSchema>;
@@ -29,6 +30,7 @@ function defaultPathAfterLogin(role: string): string {
 }
 
 function LoginPageContent() {
+    const appName = getAppName();
     const router = useRouter();
     const searchParams = useSearchParams();
     const [showPassword, setShowPassword] = useState(false);
@@ -91,7 +93,7 @@ function LoginPageContent() {
                                 Buyer & seller access
                             </p>
                             <h1 className="max-w-sm text-6xl font-semibold tracking-tight text-foreground">
-                                Mizaweb
+                                {appName}
                             </h1>
                             <p className="max-w-md text-base leading-7 text-(--muted)">
                                 Access your marketplace workspace, track orders, and manage your

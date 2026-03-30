@@ -2,6 +2,17 @@ import type { InputHTMLAttributes, ReactNode } from "react";
 import type { AuthUser } from "./auth";
 import type { Product, ProductDetail, SellerPublicProfile } from "./product";
 
+/** Pixel heights for `AppLogo` (square asset). */
+export type AppLogoSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "hero";
+
+export interface AppLogoProps {
+    className?: string;
+    size?: AppLogoSize;
+    priority?: boolean;
+    /** Overrides image `alt` (defaults to app name). */
+    title?: string;
+}
+
 /** Public shop catalog: Lithos-style grid, filters, sort, pagination. */
 export interface ProductsListingClientProps {
   initialProducts: Product[];

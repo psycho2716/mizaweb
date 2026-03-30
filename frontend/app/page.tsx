@@ -3,7 +3,7 @@ import {
     LandingGuestAudienceSection,
     LandingGuestHeroSecondaryCta
 } from "@/components/home/landing-guest-blocks";
-import { cn, formatPeso } from "@/lib/utils";
+import { cn, formatPeso, getAppName } from "@/lib/utils";
 import { Box, Coins, ScanSearch } from "lucide-react";
 import type { LandingHighlightsResponse } from "@/types";
 
@@ -54,7 +54,7 @@ export default async function Home() {
                         Stone lifestyle marketplace
                     </p>
                     <h1 className="mt-4 max-w-xl text-5xl leading-[0.95] font-semibold tracking-tight md:text-7xl">
-                        <span className="text-foreground">MIZAWEB</span>
+                        {getAppName()}
                         <br />
                         <span className="text-(--accent)">STONE GOODS</span>
                     </h1>
@@ -80,8 +80,8 @@ export default async function Home() {
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-(--accent)">
                             Features
                         </p>
-                        <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                            Why shoppers use Mizaweb
+                        <h2 className="mt-2 flex flex-wrap items-center gap-3 text-3xl font-semibold text-foreground">
+                            <span>Why use {getAppName()}?</span>
                         </h2>
                     </div>
                 </div>
@@ -112,7 +112,7 @@ export default async function Home() {
                             Products
                         </p>
                         <h2 className="mt-2 text-3xl font-semibold text-foreground">
-                            Featured Products
+                            Featured artworks
                         </h2>
                     </div>
                     <Link

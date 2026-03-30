@@ -39,9 +39,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         <div className="mizaweb-stitch-app">
             <SiteHeader />
             <div className="flex flex-1 flex-col">{children}</div>
-            {!isBuyerOrderSuccessRoute &&
-            !isBuyerOrdersListRoute &&
-            !isBuyerReviewsRoute ? (
+            {!isBuyerOrderSuccessRoute && !isBuyerOrdersListRoute && !isBuyerReviewsRoute ? (
                 <PublicFooter />
             ) : null}
         </div>

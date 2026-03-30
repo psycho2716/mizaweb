@@ -547,7 +547,9 @@ export function SellerOrdersManagementClient() {
                 <footer className="mt-14 border-t border-white/10 pt-10">
                     <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
                         <div>
-                            <p className="text-xs font-bold uppercase tracking-[0.2em]">{appName}</p>
+                            <p className="text-xs font-bold uppercase tracking-[0.2em] text-foreground">
+                                {appName}
+                            </p>
                             <p className="mt-2 max-w-xs text-sm text-(--muted)">
                                 Tools for Romblon stone sellers—listings, orders, and buyer chat.
                             </p>

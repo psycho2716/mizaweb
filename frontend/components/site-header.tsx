@@ -67,20 +67,23 @@ function UserProfileMenu({ user, onLogout }: UserProfileMenuProps) {
                 setOpen(target.open);
             }}
         >
-                <summary
-                    className="flex cursor-pointer list-none items-center gap-2 rounded-full border border-(--border) bg-(--surface-elevated) px-3 py-2 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-(--surface) focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-(--accent)/30 [&::-webkit-details-marker]:hidden"
-                    aria-label="Account menu"
-                    aria-haspopup="menu"
-                    aria-expanded={open}
-                >
-                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-(--border)/70 bg-[#080b10]">
-                        <User className="h-4 w-4 text-(--muted)" aria-hidden />
-                    </span>
-                    <ChevronDown
-                        className={cn("h-4 w-4 text-(--muted) transition-transform", open && "rotate-180")}
-                        aria-hidden
-                    />
-                </summary>
+            <summary
+                className="flex cursor-pointer list-none items-center gap-2 rounded-full border border-(--border) bg-(--surface-elevated) px-3 py-2 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-(--surface) focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-(--accent)/30 [&::-webkit-details-marker]:hidden"
+                aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-expanded={open}
+            >
+                <span className="flex h-7 w-7 items-center justify-center rounded-full border border-(--border)/70 bg-[#080b10]">
+                    <User className="h-4 w-4 text-(--muted)" aria-hidden />
+                </span>
+                <ChevronDown
+                    className={cn(
+                        "h-4 w-4 text-(--muted) transition-transform",
+                        open && "rotate-180"
+                    )}
+                    aria-hidden
+                />
+            </summary>
             <div
                 className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[220px] rounded-lg border border-(--border) bg-(--surface) py-1 shadow-lg"
                 role="menu"
@@ -215,7 +218,10 @@ export function SiteHeader() {
                                             : "Cart"
                                     }
                                 >
-                                    <ShoppingBag className="h-4.5 w-4.5 sm:h-5 sm:w-5" aria-hidden />
+                                    <ShoppingBag
+                                        className="h-4.5 w-4.5 sm:h-5 sm:w-5"
+                                        aria-hidden
+                                    />
                                     {cartCount > 0 ? (
                                         <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--accent) px-1 text-[9px] font-bold leading-none text-[#030608] sm:h-[18px] sm:min-w-[18px] sm:text-[10px]">
                                             {cartCount > 99 ? "99+" : cartCount}
@@ -280,7 +286,10 @@ export function SiteHeader() {
                                             : "Cart"
                                     }
                                 >
-                                    <ShoppingBag className="h-4.5 w-4.5 sm:h-5 sm:w-5" aria-hidden />
+                                    <ShoppingBag
+                                        className="h-4.5 w-4.5 sm:h-5 sm:w-5"
+                                        aria-hidden
+                                    />
                                     {cartCount > 0 ? (
                                         <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--accent) px-1 text-[9px] font-bold leading-none text-[#030608] sm:h-[18px] sm:min-w-[18px] sm:text-[10px]">
                                             {cartCount > 99 ? "99+" : cartCount}

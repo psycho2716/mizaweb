@@ -18,7 +18,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
     title: getAppName(),
     description:
-        "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts priced in ₱."
+        "Stone lifestyle marketplace — sculptures, décor, kitchen pieces, and gifts priced in ₱.",
+    icons: {
+        icon: "/images/logo.png",
+        apple: "/images/logo.png"
+    }
 };
 
 export default function RootLayout({
